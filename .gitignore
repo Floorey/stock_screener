@@ -1,0 +1,19 @@
+# Python Cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Local environment & config
+.env
+.streamlit/
+
+# Local databases, data files and cache
+screener_cache.json
+watchlist.json
+*.csv
+*.xlsx
+
+# IDE config
+.idea/
+.vscode/
