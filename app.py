@@ -662,63 +662,66 @@ with tab3:
     if uploaded_file is not None:
         # Load PDF details
         with st.spinner("Extrahiere Text aus PDF-Seiten..."):
-            pdf_bytes = io.BytesIO(uploaded_file.read())
-            pages_data = extract_text_from_pdf(pdf_bytes)
-            
-            if not pages_data:
-                st.error("Text konnte nicht extrahiert werden. Möglicherweise ist das PDF passwortgeschützt oder bildbasiert.")
-            else:
-                st.success(f"Erfolgreich {len(pages_data)} Seiten eingelesen!")
+            try:
+                pdf_bytes = io.BytesIO(uploaded_file.read())
+                pages_data = extract_text_from_pdf(pdf_bytes)
                 
-                # Interactive functions
-                analysis_mode = st.radio(
-                    "Analyse-Modus wählen",
-                    ["Automatischer Scan nach Schlüsseldaten", "Stichwortsuche (Keywords)"]
-                )
-                
-                # Option 1: Automated Financial Scan
-                if analysis_mode == "Automatischer Scan nach Schlüsseldaten":
-                    st.markdown("### 🔍 Gefundene Finanzzahlen im Bericht")
-                    st.info("Dieses Tool scannt Zeilen mit Zahlen, die typische Finanzbegriffe wie 'Revenue', 'Net Income', 'Operating Cash Flow' oder 'Debt' enthalten.")
+                if not pages_data:
+                    st.error("Text konnte nicht extrahiert werden. Möglicherweise ist das PDF passwortgeschützt, bildbasiert oder leer.")
+                else:
+                    st.success(f"Erfolgreich {len(pages_data)} Seiten eingelesen!")
                     
-                    findings = scan_for_financial_metrics(pages_data)
-                    
-                    for metric, items in findings.items():
-                        with st.expander(f"📌 {metric} (Gefundene Treffer: {len(items)})"):
-                            if not items:
-                                st.write("Keine direkten Treffer gefunden.")
-                            else:
-                                for item in items:
-                                    st.markdown(f"**Seite {item['page']}:** `{item['line']}`")
-                                    
-                # Option 2: Custom Keyword Search
-                elif analysis_mode == "Stichwortsuche (Keywords)":
-                    st.markdown("### 🔑 Stichwortsuche im Bericht")
-                    
-                    keyword_input = st.text_input(
-                        "Geben Sie Suchbegriffe ein (kommagetrennt, z.B. debt, Schulden, risk, Risiko, outlook, Prognose):",
-                        "debt, Schulden, risk, Risiko, revenue, Umsatz"
+                    # Interactive functions
+                    analysis_mode = st.radio(
+                        "Analyse-Modus wählen",
+                        ["Automatischer Scan nach Schlüsseldaten", "Stichwortsuche (Keywords)"]
                     )
                     
-                    keywords = [k.strip() for k in keyword_input.split(",") if k.strip()]
-                    
-                    if keywords:
-                        with st.spinner("Durchsuche Bericht..."):
-                            matches = search_keywords_in_pdf(pages_data, keywords)
-                            
-                        st.write(f"Insgesamt **{len(matches)} Treffer** für die Begriffe `{keywords}` gefunden:")
+                    # Option 1: Automated Financial Scan
+                    if analysis_mode == "Automatischer Scan nach Schlüsseldaten":
+                        st.markdown("### 🔍 Gefundene Finanzzahlen im Bericht")
+                        st.info("Dieses Tool scannt Zeilen mit Zahlen, die typische Finanzbegriffe wie 'Revenue', 'Net Income', 'Operating Cash Flow' oder 'Debt' enthalten.")
                         
-                        # Display matches in a clean table or list
-                        if matches:
-                            matches_df = pd.DataFrame(matches)
-                            st.dataframe(matches_df, use_container_width=True)
+                        findings = scan_for_financial_metrics(pages_data)
+                        
+                        for metric, items in findings.items():
+                            with st.expander(f"📌 {metric} (Gefundene Treffer: {len(items)})"):
+                                if not items:
+                                    st.write("Keine direkten Treffer gefunden.")
+                                else:
+                                    for item in items:
+                                        st.markdown(f"**Seite {item['page']}:** `{item['line']}`")
+                                        
+                    # Option 2: Custom Keyword Search
+                    elif analysis_mode == "Stichwortsuche (Keywords)":
+                        st.markdown("### 🔑 Stichwortsuche im Bericht")
+                        
+                        keyword_input = st.text_input(
+                            "Geben Sie Suchbegriffe ein (kommagetrennt, z.B. debt, Schulden, risk, Risiko, outlook, Prognose):",
+                            "debt, Schulden, risk, Risiko, revenue, Umsatz"
+                        )
+                        
+                        keywords = [k.strip() for k in keyword_input.split(",") if k.strip()]
+                        
+                        if keywords:
+                            with st.spinner("Durchsuche Bericht..."):
+                                matches = search_keywords_in_pdf(pages_data, keywords)
+                                
+                            st.write(f"Insgesamt **{len(matches)} Treffer** für die Begriffe `{keywords}` gefunden:")
                             
-                            csv_matches = matches_df.to_csv(index=False).encode('utf-8')
-                            st.download_button(
-                                "📥 Suchergebnisse herunterladen",
-                                data=csv_matches,
-                                file_name="pdf_search_results.csv",
-                                mime="text/csv"
-                            )
-                        else:
-                            st.write("Keine Treffer gefunden.")
+                            # Display matches in a clean table or list
+                            if matches:
+                                matches_df = pd.DataFrame(matches)
+                                st.dataframe(matches_df, use_container_width=True)
+                                
+                                csv_matches = matches_df.to_csv(index=False).encode('utf-8')
+                                st.download_button(
+                                    "📥 Suchergebnisse herunterladen",
+                                    data=csv_matches,
+                                    file_name="pdf_search_results.csv",
+                                    mime="text/csv"
+                                )
+                            else:
+                                st.write("Keine Treffer gefunden.")
+            except Exception as e:
+                st.error(f"Fehler beim Einlesen des PDFs: {e}")

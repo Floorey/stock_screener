@@ -9,17 +9,14 @@ def extract_text_from_pdf(pdf_file) -> List[Dict[str, Any]]:
     """
     pages_data = []
     
-    try:
-        reader = pypdf.PdfReader(pdf_file)
-        for i, page in enumerate(reader.pages):
-            text = page.extract_text()
-            if text:
-                pages_data.append({
-                    "page_number": i + 1,
-                    "content": text
-                })
-    except Exception as e:
-        print(f"Error reading PDF: {e}")
+    reader = pypdf.PdfReader(pdf_file)
+    for i, page in enumerate(reader.pages):
+        text = page.extract_text()
+        if text:
+            pages_data.append({
+                "page_number": i + 1,
+                "content": text
+            })
         
     return pages_data
 
