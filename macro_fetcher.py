@@ -191,3 +191,31 @@ def fetch_company_news(symbol: str) -> List[Dict[str, Any]]:
     except Exception as e:
         print(f"Error fetching news for {symbol}: {e}")
     return articles
+
+def fetch_wsb_trending() -> Dict[str, Dict[str, Any]]:
+    """
+    Fetches trending tickers from ApeWisdom API for WallStreetBets.
+    Returns a dictionary mapping ticker -> {rank, mentions, upvotes, rank_24h_ago, mentions_24h_ago}.
+    """
+    url = "https://apewisdom.io/api/v1.0/filter/wallstreetbets"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            results = data.get("results", [])
+            wsb_dict = {}
+            for item in results:
+                ticker = item.get("ticker")
+                if ticker:
+                    wsb_dict[ticker] = {
+                        "rank": item.get("rank"),
+                        "mentions": item.get("mentions"),
+                        "upvotes": item.get("upvotes"),
+                        "rank_24h_ago": item.get("rank_24h_ago"),
+                        "mentions_24h_ago": item.get("mentions_24h_ago")
+                    }
+            return wsb_dict
+    except Exception as e:
+        print(f"Error fetching WSB trending data: {e}")
+    return {}

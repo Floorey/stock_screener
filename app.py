@@ -7,7 +7,7 @@ import yfinance as yf
 from screener import run_screener, get_single_ticker_data, calculate_scores
 from pdf_analyzer import extract_text_from_pdf, search_keywords_in_pdf, scan_for_financial_metrics
 from watchlist_manager import load_watchlist, add_to_watchlist, remove_from_watchlist
-from macro_fetcher import fetch_macro_futures, search_polymarket_markets, fetch_company_news
+from macro_fetcher import fetch_macro_futures, search_polymarket_markets, fetch_company_news, fetch_wsb_trending
 from report_generator import generate_pdf_report
 from datetime import datetime
 
@@ -212,6 +212,13 @@ with tab1:
                 # Run the core screener
                 df_results = run_screener(index_name=index_choice, limit=limit_tickers, max_workers=15)
                 
+                # Fetch WSB trending data
+                try:
+                    wsb_data = fetch_wsb_trending()
+                    st.session_state["wsb_data"] = wsb_data
+                except Exception:
+                    st.session_state["wsb_data"] = {}
+                
                 if df_results.empty:
                     st.error("Es konnten keine Daten geladen werden. Bitte versuchen Sie es erneut.")
                 else:
@@ -224,6 +231,7 @@ with tab1:
     # Display results if in session state
     if "screener_results" in st.session_state:
         df = st.session_state["screener_results"]
+        wsb_dict = st.session_state.get("wsb_data", {})
         
         # High Level Metric Cards
         col1, col2, col3, col4 = st.columns(4)
@@ -281,8 +289,39 @@ with tab1:
         with col_short:
             st.markdown('<div class="short-banner"><h3>🔴 Top Short Kandidaten (Distress & Cash-Burn)</h3></div>', unsafe_allow_html=True)
             short_df = df.sort_values(by=["ShortScore", "CurrentRatio"], ascending=[False, True])
+            
+            # Format short interest and add squeeze risk indicator
+            short_df_display = short_df.copy()
+            if "ShortInterestPercent" in short_df_display.columns:
+                short_df_display["Short Interest"] = short_df_display["ShortInterestPercent"].apply(
+                    lambda x: f"{x*100:.1f}%" if pd.notna(x) else "N/A"
+                )
+                def determine_risk(row_item):
+                    val = row_item.get("ShortInterestPercent")
+                    symbol = row_item.get("Symbol")
+                    is_wsb_trending = symbol in wsb_dict
+                    
+                    if pd.isna(val):
+                        if is_wsb_trending:
+                            return "⚡ MITTEL (WSB aktiv)"
+                        return "N/A"
+                    # High short interest + WSB trending = EXTREMELY HIGH SQUEEZE RISK!
+                    if val >= 0.15 and is_wsb_trending:
+                        return "🚨 EXTREM (Squeeze! WSB-Trend!)"
+                    if val >= 0.15:
+                        return "⚠️ HOCH (Squeeze-Gefahr!)"
+                    if is_wsb_trending or val >= 0.08:
+                        return "⚡ MITTEL (WSB aktiv)" if is_wsb_trending else "⚡ MITTEL"
+                    return "🟢 GERING"
+                
+                short_df_display["Squeeze-Risiko"] = short_df_display.apply(determine_risk, axis=1)
+                short_df_display["WSB Mentions"] = short_df_display["Symbol"].apply(lambda s: wsb_dict.get(s, {}).get("mentions", 0))
+                cols_to_show = ["Symbol", "Company", "ShortScore", "Short Interest", "WSB Mentions", "Squeeze-Risiko", "PE", "DebtToEquity", "CurrentRatio", "FCF"]
+            else:
+                cols_to_show = ["Symbol", "Company", "ShortScore", "PE", "DebtToEquity", "CurrentRatio", "FCF"]
+                
             st.dataframe(
-                short_df[["Symbol", "Company", "ShortScore", "PE", "DebtToEquity", "CurrentRatio", "FCF"]].head(10),
+                short_df_display[cols_to_show].head(10),
                 use_container_width=True
             )
             
@@ -298,6 +337,10 @@ with tab1:
             sector_choice = st.selectbox("Sektor filtern", sector_choices)
             
         filtered_df = df.copy()
+        if wsb_dict:
+            filtered_df["WSB-Mentions"] = filtered_df["Symbol"].apply(lambda s: wsb_dict.get(s, {}).get("mentions", 0))
+            filtered_df["WSB-Rank"] = filtered_df["Symbol"].apply(lambda s: wsb_dict.get(s, {}).get("rank", "N/A"))
+            filtered_df["WSB-Trending"] = filtered_df["WSB-Rank"].apply(lambda r: "🔥 JA" if r != "N/A" else "🟢 NEIN")
         if search_query:
             filtered_df = filtered_df[
                 filtered_df["Symbol"].str.contains(search_query, case=False) | 
@@ -506,21 +549,72 @@ with tab2:
                             st.success(f"{target_symbol} zur Watchlist hinzugefügt.")
                             st.rerun()
                     
+                    # Squeeze risk calculation for detailed view
+                    short_float = info.get('shortPercentOfFloat')
+                    if short_float is not None:
+                        sf_str = f"{short_float*100:.2f}%"
+                        if short_float >= 0.15:
+                            squeeze_risk = "⚠️ HOCH (Squeeze-Gefahr!)"
+                        elif short_float >= 0.08:
+                            squeeze_risk = "⚡ MITTEL"
+                        else:
+                            squeeze_risk = "🟢 GERING"
+                    else:
+                        sf_str = "N/A"
+                        squeeze_risk = "N/A"
+                    
+                    beta = info.get('beta')
+                    beta_str = f"{beta:.2f}" if beta is not None else "N/A"
+
                     # Layout card metrics
                     col1, col2, col3 = st.columns(3)
                     with col1:
                         st.metric("Aktueller Kurs", f"${info.get('currentPrice', info.get('previousClose', 0.0)):.2f}")
                         st.metric("KGV (P/E)", f"{info.get('trailingPE', 'N/A')}")
                         st.metric("KGV Vorwärts (Forward P/E)", f"{info.get('forwardPE', 'N/A')}")
+                        st.metric("Short Interest", sf_str)
                     with col2:
                         st.metric("KBV (P/B)", f"{info.get('priceToBook', 'N/A')}")
                         de_ratio = info.get("debtToEquity")
                         st.metric("Debt-to-Equity", f"{de_ratio/100:.2f}" if de_ratio is not None else "N/A")
                         st.metric("Current Ratio", f"{info.get('currentRatio', 'N/A')}")
+                        st.metric("Squeeze-Risiko", squeeze_risk)
                     with col3:
                         st.metric("Free Cash Flow", f"${info.get('freeCashflow', 0):,}" if info.get('freeCashflow') else "N/A")
                         st.metric("ROE", f"{(info.get('returnOnEquity', 0)*100):.2f}%" if info.get('returnOnEquity') else "N/A")
                         st.metric("Umsatzwachstum (YoY)", f"{(info.get('revenueGrowth', 0)*100):.2f}%" if info.get('revenueGrowth') else "N/A")
+                        st.metric("Beta-Faktor (Risiko)", beta_str)
+                        
+                    # WSB Sentiment Section
+                    st.markdown("### 🦍 WallStreetBets (Reddit) Sentiment")
+                    try:
+                        wsb_data_current = fetch_wsb_trending()
+                        ticker_wsb = wsb_data_current.get(target_symbol)
+                    except Exception:
+                        ticker_wsb = None
+                        
+                    if ticker_wsb:
+                        st.markdown(f"""
+                        <div style="background-color: rgba(239, 68, 68, 0.15); border-left: 5px solid #ef4444; padding: 1.2rem; border-radius: 8px; margin-bottom: 1.5rem;">
+                            <h4 style="margin: 0 0 0.5rem 0; color: #ef4444;">🔥 WallStreetBets Trend-Warnung!</h4>
+                            <p style="margin: 0.2rem 0; font-size: 1rem; color: #f3f4f6;">
+                                <b>{target_symbol}</b> ist zurzeit ein aktiver <b>Hype-Wert</b> auf r/wallstreetbets!
+                            </p>
+                            <ul style="margin: 0.5rem 0 0 0; padding-left: 1.2rem; color: #e5e7eb;">
+                                <li><b>WSB-Rang:</b> Platz {ticker_wsb['rank']} der meistdiskutierten Aktien</li>
+                                <li><b>Erwähnungen (Mentions):</b> {ticker_wsb['mentions']} in den letzten 24h</li>
+                                <li><b>Upvotes gesamt:</b> {ticker_wsb['upvotes']}</li>
+                                <li><b>Squeeze-Gefahr:</b> Extrem hoch, falls das Short-Interest ebenfalls hoch ist!</li>
+                            </ul>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    else:
+                        st.markdown("""
+                        <div style="background-color: rgba(16, 185, 129, 0.1); border-left: 5px solid #10b981; padding: 1rem; border-radius: 6px; margin-bottom: 1.5rem;">
+                            <span style="color: #10b981; font-weight: bold;">🟢 Keine Hype-Aktivität</span><br>
+                            <span style="font-size: 0.9rem; color: #9ca3af;">Dieser Ticker ist zurzeit nicht in den Top-Trends auf r/wallstreetbets gelistet. Geringes Risiko eines retail-getriebenen Short Squeezes.</span>
+                        </div>
+                        """, unsafe_allow_html=True)
                         
                     # Detailed Information Box
                     st.markdown("### 📝 Unternehmensbeschreibung")

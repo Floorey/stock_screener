@@ -382,8 +382,11 @@ def calculate_scores(df: pd.DataFrame) -> pd.DataFrame:
             s_score += 1
             
         short_interest = row["ShortInterestPercent"]
-        if short_interest is not None and short_interest > 0.20:
-            s_score -= 0.5 
+        if short_interest is not None:
+            if short_interest >= 0.15:
+                s_score -= 1.5  # Starker Abzug wegen hoher Short-Squeeze-Gefahr
+            elif short_interest >= 0.08:
+                s_score -= 0.5  # Moderater Abzug 
             
         long_scores.append(l_score)
         short_scores.append(s_score)
