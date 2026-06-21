@@ -1,5 +1,6 @@
 import os
 import sys
+import io
 import requests
 import json
 import pandas as pd
@@ -91,7 +92,7 @@ def fetch_sp500_tickers() -> List[Tuple[str, str]]:
         response = requests.get(url, headers=headers, timeout=10)
         
         if response.status_code == 200:
-            tables = pd.read_html(response.text)
+            tables = pd.read_html(io.StringIO(response.text))
             df = tables[0]
             df["Symbol"] = df["Symbol"].str.replace(".", "-", regex=False)
             tickers = list(zip(df["Symbol"], df["Security"]))
@@ -134,7 +135,7 @@ def fetch_dow_jones_tickers() -> List[Tuple[str, str]]:
         response = requests.get(url, headers=headers, timeout=10)
         
         if response.status_code == 200:
-            tables = pd.read_html(response.text)
+            tables = pd.read_html(io.StringIO(response.text))
             for table in tables:
                 columns = [str(col).lower() for col in table.columns]
                 if "symbol" in columns or "ticker" in columns:
@@ -164,6 +165,48 @@ def fetch_dow_jones_tickers() -> List[Tuple[str, str]]:
     ]
     print(f"[Fetcher] Fallback geladen: {len(fallback)} Dow Jones Ticker.")
     return fallback
+
+def fetch_nasdaq100_tickers() -> List[Tuple[str, str]]:
+    """Scrapes Nasdaq 100 tickers and company names from Wikipedia. Includes fallback list."""
+    print("[Fetcher] Lade Nasdaq 100 Ticker von Wikipedia...")
+    try:
+        url = "https://en.wikipedia.org/wiki/Nasdaq-100"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
+        response = requests.get(url, headers=headers, timeout=10)
+        
+        if response.status_code == 200:
+            tables = pd.read_html(io.StringIO(response.text))
+            for table in tables:
+                columns = [str(col).lower() for col in table.columns]
+                if "ticker" in columns or "symbol" in columns:
+                    symbol_col = [col for col in table.columns if "ticker" in str(col).lower() or "symbol" in str(col).lower()][0]
+                    name_col = [col for col in table.columns if "company" in str(col).lower() or "corporation" in str(col).lower()][0]
+                    table[symbol_col] = table[symbol_col].astype(str).str.replace(".", "-", regex=False)
+                    tickers = list(zip(table[symbol_col], table[name_col]))
+                    print(f"[Fetcher] {len(tickers)} Nasdaq 100 Ticker erfolgreich geladen.")
+                    return tickers
+        else:
+            print(f"[Fetcher] Wikipedia antwortete mit Status: {response.status_code}. Nutze Fallback.")
+    except Exception as e:
+        print(f"[Fetcher] Wikipedia-Scraping für Nasdaq 100 fehlgeschlagen: {e}. Nutze Fallback.")
+    
+    # 35 Major Nasdaq 100 Fallback list
+    nasdaq100_fallback = [
+        ("AAPL", "Apple Inc."), ("MSFT", "Microsoft Corp."), ("NVDA", "NVIDIA Corp."), 
+        ("AMZN", "Amazon.com Inc."), ("META", "Meta Platforms Inc."), ("GOOGL", "Alphabet Inc. Cl A"), 
+        ("GOOG", "Alphabet Inc. Cl C"), ("AVGO", "Broadcom Inc."), ("TSLA", "Tesla Inc."), 
+        ("COST", "Costco Wholesale Corp."), ("NFLX", "Netflix Inc."), ("AMD", "Advanced Micro Devices"), 
+        ("PEP", "PepsiCo Inc."), ("TMUS", "T-Mobile US Inc."), ("CSCO", "Cisco Systems Inc."), 
+        ("QCOM", "Qualcomm Inc."), ("INTU", "Intuit Inc."), ("AMGN", "Amgen Inc."), 
+        ("AMAT", "Applied Materials Inc."), ("TXN", "Texas Instruments Inc."), ("ISRG", "Intuitive Surgical Inc."), 
+        ("HON", "Honeywell International Inc."), ("BKNG", "Booking Holdings Inc."), ("MU", "Micron Technology Inc."), 
+        ("LRCX", "Lam Research Corp."), ("MDLZ", "Mondelez International Inc."), ("VRTX", "Vertex Pharmaceuticals Inc."), 
+        ("REGN", "Regeneron Pharmaceuticals Inc."), ("PANW", "Palo Alto Networks Inc."), ("ADP", "Automatic Data Processing Inc."), 
+        ("SBUX", "Starbucks Corp."), ("PYPL", "PayPal Holdings Inc."), ("GILD", "Gilead Sciences Inc."), 
+        ("ADI", "Analog Devices Inc."), ("INTC", "Intel Corp.")
+    ]
+    print(f"[Fetcher] Fallback geladen: {len(nasdaq100_fallback)} Nasdaq 100 Ticker.")
+    return nasdaq100_fallback
 
 def fetch_russell2000_tickers() -> List[Tuple[str, str]]:
     """Fetches Russell 2000 tickers from ikoniaris repository on GitHub. Includes fallback list."""
@@ -359,6 +402,8 @@ def run_screener(index_name: str = "S&P 500", limit: int = None, max_workers: in
         tickers_data = fetch_sp500_tickers()
     elif index_name == "Dow Jones":
         tickers_data = fetch_dow_jones_tickers()
+    elif index_name in ["NASDAQ 100", "Nasdaq 100", "NASDAQ"]:
+        tickers_data = fetch_nasdaq100_tickers()
     elif index_name == "Russell 2000":
         tickers_data = fetch_russell2000_tickers()
     else:

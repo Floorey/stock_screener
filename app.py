@@ -117,7 +117,7 @@ st.sidebar.markdown("### ⚙️ Scan-Einstellungen")
 # Index Selection
 index_choice = st.sidebar.selectbox(
     "Index auswählen",
-    ["Dow Jones", "S&P 500", "Russell 2000"],
+    ["Dow Jones", "S&P 500", "NASDAQ 100", "Russell 2000"],
     help="Index, dessen Aktien gescreent werden sollen."
 )
 

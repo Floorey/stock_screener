@@ -1,11 +1,11 @@
 # Fundamental Stock Screener & PDF Analyzer (Alpaca-kompatibel)
 
-Dieses Tool hilft Ihnen dabei, fundamentale Daten von Aktien aus bekannten Indizes (S&P 500, Dow Jones, Russell 2000) zu analysieren und zu bewerten. Es berechnet Long- und Short-Scores und prüft die direkte Handelbarkeit und Shortbarkeit über Alpaca. Zudem bietet es ein Modul zur automatischen Auswertung von PDF-Finanzberichten (z.B. 10-K/10-Q).
+Dieses Tool hilft Ihnen dabei, fundamentale Daten von Aktien aus bekannten Indizes (S&P 500, Dow Jones, NASDAQ 100, Russell 2000) zu analysieren und zu bewerten. Es berechnet Long- und Short-Scores und prüft die direkte Handelbarkeit und Shortbarkeit über Alpaca. Zudem bietet es ein Modul zur automatischen Auswertung von PDF-Finanzberichten (z.B. 10-K/10-Q).
 
 ## Features
 
 1. **Index Scraper:**
-   - Lädt Ticker-Daten für **S&P 500**, **Dow Jones** (über Wikipedia-Scraping) und **Russell 2000** (über GitHub-Listen).
+   - Lädt Ticker-Daten für **S&P 500**, **Dow Jones**, **NASDAQ 100** (über Wikipedia-Scraping) und **Russell 2000** (über GitHub-Listen).
 2. **Alpaca Integration:**
    - Prüft über die Alpaca Assets API, welche Ticker **handelbar** (`tradable`), **leihbar** (`shortable`) und **leicht auszuleihen** (`easy_to_borrow`) sind.
 3. **Fundamental Scoring Engine (yFinance):**
