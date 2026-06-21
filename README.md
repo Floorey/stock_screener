@@ -83,3 +83,19 @@ Dies lädt die ersten 15 Ticker des Dow Jones und gibt die Top-Kandidaten aus.
 - Umsatzwachstum YoY < -5% (+1)
 - Nettomarge < -10% (+1)
 - *Abzug:* Sehr hohe Short Interest (> 20%) verringert den Score leicht (-0.5), um das Risiko von Short Squeezes abzumildern.
+
+---
+
+## GitHub-Synchronisation
+
+Dieses Verzeichnis ist bereits als lokales Git-Repository initialisiert. Um das Projekt auf GitHub zu veröffentlichen, führen Sie folgende Schritte in Ihrem Terminal aus:
+
+1. **Erstellen Sie ein neues, leeres Repository** auf [github.com](https://github.com/new) (ohne README, .gitignore oder Lizenz).
+2. **Kopieren Sie die Repository-URL** (z. B. `https://github.com/IhrNutzername/IhrRepoName.git`).
+3. **Verbinden und pushen Sie** das Projekt über Ihr Terminal:
+```powershell
+git remote add origin https://github.com/IhrNutzername/IhrRepoName.git
+git branch -M main
+git push -u origin main
+```
+Lokale Änderungen an temporären Dateien (wie Cache, Watchlist und Exporte) sind über die Datei `.gitignore` bereits vom Commit ausgeschlossen, um sensible API-Schlüssel oder private Listen nicht öffentlich zu machen.
