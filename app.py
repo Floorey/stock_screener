@@ -434,6 +434,30 @@ with tab_wl:
                 ]
             st.success(f"{len(to_remove)} Aktie(n) erfolgreich entfernt.")
             st.rerun()
+            
+        # Import watchlist
+        st.markdown("---")
+        st.markdown("### 📥 Watchlist importieren")
+        uploaded_wl = st.file_uploader(
+            "Laden Sie eine Ticker-Liste (.txt oder .csv) hoch (Zeilen- oder Komma-separiert):",
+            type=["txt", "csv"],
+            key="watchlist_uploader"
+        )
+        if uploaded_wl is not None:
+            content_bytes = uploaded_wl.read()
+            content_str = content_bytes.decode("utf-8")
+            # Split by comma or newline
+            imported_tickers = [line.strip().upper() for line in content_str.replace(",", "\n").split("\n") if line.strip()]
+            added = 0
+            for t in imported_tickers:
+                if add_to_watchlist(t):
+                    added += 1
+            if added > 0:
+                st.success(f"{added} Ticker erfolgreich aus Datei importiert!")
+                st.rerun()
+            else:
+                st.warning("Keine neuen Ticker importiert (bereits in der Liste vorhanden).")
+
 
 # ----------------------------------------------------
 # TAB 2: INDIVIDUAL STOCK ANALYZER
