@@ -8,6 +8,8 @@ from screener import run_screener, get_single_ticker_data, calculate_scores
 from pdf_analyzer import extract_text_from_pdf, search_keywords_in_pdf, scan_for_financial_metrics
 from watchlist_manager import load_watchlist, add_to_watchlist, remove_from_watchlist
 from macro_fetcher import fetch_macro_futures, search_polymarket_markets, fetch_company_news
+from report_generator import generate_pdf_report
+from datetime import datetime
 
 # Reconfigure encoding to avoid Windows encoding crashes
 if sys.platform.startswith("win"):
@@ -545,6 +547,80 @@ with tab2:
                                         <span style="font-size: 0.8rem; color: #9ca3af;">Endet am: {m['Enddatum']} | <a href="{m['Link']}" target="_blank" style="color: #3b82f6; text-decoration: none;">Auf Polymarket ansehen ↗</a></span>
                                     </div>
                                     """, unsafe_allow_html=True)
+                    
+                    # --- BLACKGATE CAPITAL PDF REPORT GENERATOR ---
+                    st.markdown("---")
+                    st.markdown("### 📝 Blackgate Capital Investment Research Memo erstellen")
+                    st.markdown("Generieren Sie ein professionelles PDF-Investment-Memo für diese Aktie.")
+                    
+                    memo_col1, memo_col2 = st.columns(2)
+                    with memo_col1:
+                        analyst_name = st.text_input("Analysten-Name:", value="Lukas", key=f"analyst_name_{target_symbol}")
+                        recommendation = st.selectbox(
+                            "Empfehlung / Rating:",
+                            ["STRONG BUY", "BUY", "HOLD", "SHORT", "STRONG SHORT"],
+                            index=1,
+                            key=f"rec_{target_symbol}"
+                        )
+                    with memo_col2:
+                        analyst_notes = st.text_area(
+                            "Investment-These & Analysten-Notizen (Fließtext):",
+                            height=120,
+                            placeholder="Schreiben Sie hier Ihre Begründung (Katalysatoren, Argumente für Kauf/Leerverkauf, Risiken)...",
+                            key=f"notes_{target_symbol}"
+                        )
+                        
+                    generate_btn = st.button("📄 PDF Memo generieren", key=f"gen_btn_{target_symbol}")
+                    if generate_btn:
+                        with st.spinner("Erstelle PDF Investment Research Memo..."):
+                            try:
+                                news_items = fetch_company_news(target_symbol)
+                                first_word = company_name.split()[0].replace(",", "").replace(".", "").strip()
+                                poly_items = search_polymarket_markets(first_word)
+                                
+                                # Recalculate scores for this single company info dict
+                                row_dict = {
+                                    "PE": info.get("trailingPE"),
+                                    "PB": info.get("priceToBook"),
+                                    "DebtToEquity": info.get("debtToEquity", 0) / 100.0 if info.get("debtToEquity") is not None else None,
+                                    "CurrentRatio": info.get("currentRatio"),
+                                    "FCF": info.get("freeCashflow"),
+                                    "ROE": info.get("returnOnEquity"),
+                                    "RevenueGrowth": info.get("revenueGrowth"),
+                                    "NetMargin": info.get("profitMargins"),
+                                    "EVToRevenue": info.get("enterpriseToRevenue"),
+                                    "ShortInterestPercent": info.get("shortPercentOfFloat")
+                                }
+                                df_scores = calculate_scores(pd.DataFrame([row_dict]))
+                                l_score = int(df_scores["LongScore"].iloc[0])
+                                s_score = int(df_scores["ShortScore"].iloc[0])
+                                
+                                pdf_stream = generate_pdf_report(
+                                    symbol=target_symbol,
+                                    company_name=company_name,
+                                    info=info,
+                                    long_score=l_score,
+                                    short_score=s_score,
+                                    news=news_items,
+                                    polymarket=poly_items,
+                                    analyst_notes=analyst_notes,
+                                    analyst_name=analyst_name,
+                                    recommendation=recommendation
+                                )
+                                
+                                st.session_state[f"pdf_stream_{target_symbol}"] = pdf_stream.getvalue()
+                                st.success("PDF erfolgreich generiert! Klicken Sie unten auf Herunterladen.")
+                            except Exception as e:
+                                st.error(f"Fehler bei der PDF-Generierung: {e}")
+                                
+                    if f"pdf_stream_{target_symbol}" in st.session_state:
+                        st.download_button(
+                            label="📥 PDF Investment Memo herunterladen",
+                            data=st.session_state[f"pdf_stream_{target_symbol}"],
+                            file_name=f"Blackgate_Research_Memo_{target_symbol}_{datetime.now().strftime('%Y%m%d')}.pdf",
+                            mime="application/pdf",
+                            key=f"dl_btn_{target_symbol}"
+                        )
                 else:
                     st.error(f"Keine ausreichenden Daten für Ticker {target_symbol} gefunden. Bitte Ticker prüfen.")
             except Exception as e:
