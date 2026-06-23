@@ -9,7 +9,17 @@ from pdf_analyzer import extract_text_from_pdf, search_keywords_in_pdf, scan_for
 from watchlist_manager import load_watchlist, add_to_watchlist, remove_from_watchlist
 from macro_fetcher import fetch_macro_futures, search_polymarket_markets, fetch_company_news, fetch_wsb_trending
 from report_generator import generate_pdf_report
+from options_ui import render_options_tab
 from datetime import datetime
+from alpaca_trader import (
+    is_alpaca_configured,
+    get_account_info,
+    get_positions,
+    get_open_orders,
+    place_order,
+    cancel_order,
+    cancel_all_orders
+)
 
 # Reconfigure encoding to avoid Windows encoding crashes
 if sys.platform.startswith("win"):
@@ -167,10 +177,12 @@ if "macro_futures_df" in st.session_state and not st.session_state["macro_future
     )
 
 # Initialize Tabs
-tab1, tab_wl, tab2, tab3 = st.tabs([
+tab1, tab_wl, tab_opt, tab2, tab_trade, tab3 = st.tabs([
     "🎯 Screener Dashboard", 
     "⭐ Watchlist Manager", 
+    "🎫 Options-Screener",
     "📈 Einzelwert-Analyse", 
+    "💼 Alpaca Trading",
     "📄 PDF Finanzbericht Analyzer"
 ])
 
@@ -503,6 +515,13 @@ with tab_wl:
 
 
 # ----------------------------------------------------
+# TAB OPT: OPTIONS SCREENER
+# ----------------------------------------------------
+with tab_opt:
+    render_options_tab(get_single_ticker_data, calculate_scores)
+
+
+# ----------------------------------------------------
 # TAB 2: INDIVIDUAL STOCK ANALYZER
 # ----------------------------------------------------
 with tab2:
@@ -513,6 +532,8 @@ with tab2:
     if "screener_results" in st.session_state:
         available_symbols.update(st.session_state["screener_results"]["Symbol"].tolist())
     available_symbols.update(watchlist_tickers)
+    # Option 2: CLO-ETFs
+    available_symbols.update(["JAAA", "JBBB", "CLOI", "RAAA", "RAAR"])
     
     search_symbol = st.selectbox(
         "Wählen Sie ein Symbol aus Ihren aktiven Scans/Watchlists:",
@@ -566,24 +587,108 @@ with tab2:
                     beta = info.get('beta')
                     beta_str = f"{beta:.2f}" if beta is not None else "N/A"
 
+                    is_etf = (info.get("quoteType") == "ETF") or (target_symbol in ["JAAA", "JBBB", "CLOI", "RAAA", "RAAR"])
+                    
                     # Layout card metrics
                     col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("Aktueller Kurs", f"${info.get('currentPrice', info.get('previousClose', 0.0)):.2f}")
-                        st.metric("KGV (P/E)", f"{info.get('trailingPE', 'N/A')}")
-                        st.metric("KGV Vorwärts (Forward P/E)", f"{info.get('forwardPE', 'N/A')}")
-                        st.metric("Short Interest", sf_str)
-                    with col2:
-                        st.metric("KBV (P/B)", f"{info.get('priceToBook', 'N/A')}")
-                        de_ratio = info.get("debtToEquity")
-                        st.metric("Debt-to-Equity", f"{de_ratio/100:.2f}" if de_ratio is not None else "N/A")
-                        st.metric("Current Ratio", f"{info.get('currentRatio', 'N/A')}")
-                        st.metric("Squeeze-Risiko", squeeze_risk)
-                    with col3:
-                        st.metric("Free Cash Flow", f"${info.get('freeCashflow', 0):,}" if info.get('freeCashflow') else "N/A")
-                        st.metric("ROE", f"{(info.get('returnOnEquity', 0)*100):.2f}%" if info.get('returnOnEquity') else "N/A")
-                        st.metric("Umsatzwachstum (YoY)", f"{(info.get('revenueGrowth', 0)*100):.2f}%" if info.get('revenueGrowth') else "N/A")
-                        st.metric("Beta-Faktor (Risiko)", beta_str)
+                    if is_etf:
+                        with col1:
+                            st.metric("Aktueller Kurs", f"${info.get('currentPrice', info.get('previousClose', 0.0)):.2f}")
+                            st.metric("NAV (Nettoinventarwert)", f"${info.get('navPrice', 0.0):.2f}" if info.get('navPrice') else "N/A")
+                            st.metric("Dividendenrendite (Yield)", f"{(info.get('yield', 0)*100):.2f}%" if info.get('yield') else "N/A")
+                        with col2:
+                            st.metric("Kostenquote (Expense Ratio)", f"{info.get('netExpenseRatio', 'N/A')}%" if info.get('netExpenseRatio') is not None else "N/A")
+                            assets_val = info.get('totalAssets') or info.get('netAssets')
+                            st.metric("Fondsvolumen (Assets)", f"${assets_val:,}" if assets_val else "N/A")
+                            st.metric("Fonds-Kategorie", info.get('category', 'N/A'))
+                        with col3:
+                            st.metric("Fonds-Anbieter (Family)", info.get('fundFamily', 'N/A'))
+                            st.metric("Beta (3 Jahre)", f"{info.get('beta3Year', 'N/A')}")
+                            st.metric("YTD Performance", f"{(info.get('ytdReturn', 0)*100):.2f}%" if info.get('ytdReturn') else "N/A")
+                    else:
+                        with col1:
+                            st.metric("Aktueller Kurs", f"${info.get('currentPrice', info.get('previousClose', 0.0)):.2f}")
+                            st.metric("KGV (P/E)", f"{info.get('trailingPE', 'N/A')}")
+                            st.metric("KGV Vorwärts (Forward P/E)", f"{info.get('forwardPE', 'N/A')}")
+                            st.metric("Short Interest", sf_str)
+                        with col2:
+                            st.metric("KBV (P/B)", f"{info.get('priceToBook', 'N/A')}")
+                            de_ratio = info.get("debtToEquity")
+                            st.metric("Debt-to-Equity", f"{de_ratio/100:.2f}" if de_ratio is not None else "N/A")
+                            st.metric("Current Ratio", f"{info.get('currentRatio', 'N/A')}")
+                            st.metric("Squeeze-Risiko", squeeze_risk)
+                        with col3:
+                            st.metric("Free Cash Flow", f"${info.get('freeCashflow', 0):,}" if info.get('freeCashflow') else "N/A")
+                            st.metric("ROE", f"{(info.get('returnOnEquity', 0)*100):.2f}%" if info.get('returnOnEquity') else "N/A")
+                            st.metric("Umsatzwachstum (YoY)", f"{(info.get('revenueGrowth', 0)*100):.2f}%" if info.get('revenueGrowth') else "N/A")
+                            st.metric("Beta-Faktor (Risiko)", beta_str)
+                    
+                    # --- ALPACA QUICK TRADE INTERFACE ---
+                    if is_alpaca_configured():
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        st.markdown('<div style="background-color: #1f2937; border-radius: 12px; padding: 1.5rem; border: 1px solid #374151;">'
+                                    '<h3 style="margin-top: 0; color: #3b82f6;">🦙 Alpaca Schnell-Handel</h3>'
+                                    'Handeln Sie diesen Wert direkt über Ihr Alpaca-Konto.</div>', unsafe_allow_html=True)
+                        
+                        trade_col1, trade_col2, trade_col3 = st.columns([1, 1, 2])
+                        with trade_col1:
+                            trade_qty = st.number_input(
+                                "Stückzahl", 
+                                min_value=0.01, 
+                                value=1.0, 
+                                step=1.0, 
+                                key=f"trade_qty_{target_symbol}"
+                            )
+                        with trade_col2:
+                            trade_type = st.selectbox(
+                                "Order-Typ", 
+                                ["Market", "Limit"], 
+                                key=f"trade_type_{target_symbol}"
+                            )
+                            trade_limit_price = None
+                            if trade_type == "Limit":
+                                current_p = info.get('currentPrice') or info.get('previousClose', 0.0)
+                                trade_limit_price = st.number_input(
+                                    "Limit-Preis ($)", 
+                                    min_value=0.01, 
+                                    value=float(current_p) if current_p else 10.0, 
+                                    step=0.01, 
+                                    key=f"trade_limit_{target_symbol}"
+                                )
+                        with trade_col3:
+                            st.markdown("<br>", unsafe_allow_html=True)
+                            buy_btn, sell_btn = st.columns(2)
+                            with buy_btn:
+                                if st.button("🟢 Kaufen (Buy)", key=f"buy_btn_action_{target_symbol}", use_container_width=True):
+                                    with st.spinner("Übermittle Kauforder..."):
+                                        res = place_order(
+                                            symbol=target_symbol,
+                                            qty=trade_qty,
+                                            side="buy",
+                                            order_type=trade_type.lower(),
+                                            limit_price=trade_limit_price
+                                        )
+                                        if res.get("status") == "success":
+                                            ord_info = res.get("order", {})
+                                            st.success(f"Kauforder erfolgreich platziert: {trade_qty} {target_symbol} ({ord_info.get('status')})")
+                                        else:
+                                            st.error(f"Fehler: {res.get('message')}")
+                            with sell_btn:
+                                if st.button("🔴 Verkaufen (Sell)", key=f"sell_btn_action_{target_symbol}", use_container_width=True):
+                                    with st.spinner("Übermittle Verkaufsorder..."):
+                                        res = place_order(
+                                            symbol=target_symbol,
+                                            qty=trade_qty,
+                                            side="sell",
+                                            order_type=trade_type.lower(),
+                                            limit_price=trade_limit_price
+                                        )
+                                        if res.get("status") == "success":
+                                            ord_info = res.get("order", {})
+                                            st.success(f"Verkaufsorder erfolgreich platziert: {trade_qty} {target_symbol} ({ord_info.get('status')})")
+                                        else:
+                                            st.error(f"Fehler: {res.get('message')}")
+                        st.markdown("---")
                         
                     # WSB Sentiment Section
                     st.markdown("### 🦍 WallStreetBets (Reddit) Sentiment")
@@ -697,21 +802,26 @@ with tab2:
                                 poly_items = search_polymarket_markets(first_word)
                                 
                                 # Recalculate scores for this single company info dict
-                                row_dict = {
-                                    "PE": info.get("trailingPE"),
-                                    "PB": info.get("priceToBook"),
-                                    "DebtToEquity": info.get("debtToEquity", 0) / 100.0 if info.get("debtToEquity") is not None else None,
-                                    "CurrentRatio": info.get("currentRatio"),
-                                    "FCF": info.get("freeCashflow"),
-                                    "ROE": info.get("returnOnEquity"),
-                                    "RevenueGrowth": info.get("revenueGrowth"),
-                                    "NetMargin": info.get("profitMargins"),
-                                    "EVToRevenue": info.get("enterpriseToRevenue"),
-                                    "ShortInterestPercent": info.get("shortPercentOfFloat")
-                                }
-                                df_scores = calculate_scores(pd.DataFrame([row_dict]))
-                                l_score = int(df_scores["LongScore"].iloc[0])
-                                s_score = int(df_scores["ShortScore"].iloc[0])
+                                if is_etf:
+                                    l_score = 0
+                                    s_score = 0
+                                else:
+                                    # Recalculate scores for this single company info dict
+                                    row_dict = {
+                                        "PE": info.get("trailingPE"),
+                                        "PB": info.get("priceToBook"),
+                                        "DebtToEquity": info.get("debtToEquity", 0) / 100.0 if info.get("debtToEquity") is not None else None,
+                                        "CurrentRatio": info.get("currentRatio"),
+                                        "FCF": info.get("freeCashflow"),
+                                        "ROE": info.get("returnOnEquity"),
+                                        "RevenueGrowth": info.get("revenueGrowth"),
+                                        "NetMargin": info.get("profitMargins"),
+                                        "EVToRevenue": info.get("enterpriseToRevenue"),
+                                        "ShortInterestPercent": info.get("shortPercentOfFloat")
+                                    }
+                                    df_scores = calculate_scores(pd.DataFrame([row_dict]))
+                                    l_score = int(df_scores["LongScore"].iloc[0])
+                                    s_score = int(df_scores["ShortScore"].iloc[0])
                                 
                                 pdf_stream = generate_pdf_report(
                                     symbol=target_symbol,
@@ -723,7 +833,8 @@ with tab2:
                                     polymarket=poly_items,
                                     analyst_notes=analyst_notes,
                                     analyst_name=analyst_name,
-                                    recommendation=recommendation
+                                    recommendation=recommendation,
+                                    is_etf=is_etf
                                 )
                                 
                                 st.session_state[f"pdf_stream_{target_symbol}"] = pdf_stream.getvalue()
@@ -743,6 +854,246 @@ with tab2:
                     st.error(f"Keine ausreichenden Daten für Ticker {target_symbol} gefunden. Bitte Ticker prüfen.")
             except Exception as e:
                 st.error(f"Fehler beim Abrufen der Einzelwertdaten: {e}")
+
+# ----------------------------------------------------
+# TAB TRADE: ALPACA TRADING PORTFOLIO & ORDERS
+# ----------------------------------------------------
+with tab_trade:
+    st.markdown('<div class="wl-banner"><h2>💼 Alpaca Portfolio & Trading Desk</h2></div>', unsafe_allow_html=True)
+    
+    # Option 2: CLO-ETF Quick Selector
+    st.markdown("### 🏷️ CLO-ETF Schnell-Auswahl (Option 2)")
+    st.markdown("<small>Wähle einen der CLO-ETFs aus, um ihn direkt im Trading Desk (rechts) zu laden und zu handeln:</small>", unsafe_allow_html=True)
+    clo_cols = st.columns(5)
+    clo_etfs = [
+        ("JAAA", "Janus Henderson AAA CLO ETF"),
+        ("JBBB", "Janus Henderson B-BBB CLO ETF"),
+        ("CLOI", "VanEck CLO ETF"),
+        ("RAAA", "Reckoner Yield Enhanced AAA CLO ETF"),
+        ("RAAR", "Reckoner Yield Enhanced AAA CLO Reinvesting ETF")
+    ]
+    for i, (symbol, name) in enumerate(clo_etfs):
+        with clo_cols[i]:
+            if st.button(f"Trade {symbol}", key=f"trade_clo_btn_{symbol}", help=name, use_container_width=True):
+                st.session_state["trading_desk_symbol"] = symbol
+                st.rerun()
+    st.markdown("---")
+    
+    if not is_alpaca_configured():
+        st.warning("⚠️ Alpaca API-Schlüssel sind nicht konfiguriert.")
+        st.markdown("""
+        Um Trading zu aktivieren, tragen Sie bitte Ihre **Alpaca API Keys** in der linken Seitenleiste unter **Alpaca Integration** ein oder hinterlegen Sie diese in der `.env`-Datei:
+        ```env
+        ALPACA_API_KEY=dein_key_id
+        ALPACA_SECRET_KEY=dein_secret_key
+        ALPACA_BASE_URL=https://paper-api.alpaca.markets
+        ```
+        *Hinweis: Verwenden Sie für Tests immer Ihre **Paper Trading Keys**, um echtes Geld zu schützen!*
+        """)
+    else:
+        # Load account information
+        with st.spinner("Lade Alpaca-Kontodaten..."):
+            acc = get_account_info()
+            positions = get_positions()
+            open_orders = get_open_orders()
+            
+        if not acc:
+            st.error("Fehler beim Abrufen der Alpaca-Kontodaten. Bitte überprüfen Sie Ihre API-Schlüssel.")
+        else:
+            # Styled metrics
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <span style="font-size: 0.9rem; color: #9ca3af;">Portfolio-Wert (Equity)</span>
+                    <h2 style="margin: 0.5rem 0; color: #3b82f6;">${float(acc.get('equity', 0)):,.2f}</h2>
+                    <span style="font-size: 0.8rem; color: #9ca3af;">Konto-Status: {acc.get('status', 'ACTIVE')}</span>
+                </div>
+                """, unsafe_allow_html=True)
+            with col2:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <span style="font-size: 0.9rem; color: #9ca3af;">Freies Bargeld (Cash)</span>
+                    <h2 style="margin: 0.5rem 0; color: #10b981;">${float(acc.get('cash', 0)):,.2f}</h2>
+                    <span style="font-size: 0.8rem; color: #9ca3af;">Unverplantes Kapital</span>
+                </div>
+                """, unsafe_allow_html=True)
+            with col3:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <span style="font-size: 0.9rem; color: #9ca3af;">Kaufkraft (Buying Power)</span>
+                    <h2 style="margin: 0.5rem 0; color: #8b5cf6;">${float(acc.get('buying_power', 0)):,.2f}</h2>
+                    <span style="font-size: 0.8rem; color: #9ca3af;">Hebel-Kaufkraft</span>
+                </div>
+                """, unsafe_allow_html=True)
+            with col4:
+                api_key, _, base_url = get_alpaca_credentials()
+                account_mode = "LIVE" if "live" in base_url.lower() else "PAPER"
+                st.markdown(f"""
+                <div class="metric-card">
+                    <span style="font-size: 0.9rem; color: #9ca3af;">Handels-Modus</span>
+                    <h2 style="margin: 0.5rem 0; color: #f59e0b;">{account_mode}</h2>
+                    <span style="font-size: 0.8rem; color: #9ca3af;">Währung: {acc.get('currency', 'USD')}</span>
+                </div>
+                """, unsafe_allow_html=True)
+                
+            st.markdown("<br>", unsafe_allow_html=True)
+            
+            # Divide page into layout: Left side Positions & Orders, Right side Trading Desk
+            pos_col, order_desk_col = st.columns([3, 2])
+            
+            with pos_col:
+                st.markdown("### 📈 Offene Positionen")
+                if not positions:
+                    st.info("Keine offenen Positionen in deinem Alpaca-Portfolio.")
+                else:
+                    pos_list = []
+                    for p in positions:
+                        symbol = p.get('symbol')
+                        qty = float(p.get('qty', 0))
+                        market_value = float(p.get('market_value', 0))
+                        cost_basis = float(p.get('cost_basis', 0))
+                        avg_entry = float(p.get('avg_entry_price', 0))
+                        current_price = float(p.get('current_price', 0))
+                        unrealized_pl = float(p.get('unrealized_pl', 0))
+                        unrealized_pl_pct = float(p.get('unrealized_plpc', 0)) * 100
+                        
+                        pos_list.append({
+                            "Symbol": symbol,
+                            "Menge": qty,
+                            "Akt. Kurs": f"${current_price:.2f}",
+                            "Durchschn. Einstieg": f"${avg_entry:.2f}",
+                            "Marktwert": f"${market_value:.2f}",
+                            "Kostenbasis": f"${cost_basis:.2f}",
+                            "GuV ($)": unrealized_pl,
+                            "GuV (%)": f"{unrealized_pl_pct:.2f}%"
+                        })
+                    
+                    df_pos = pd.DataFrame(pos_list)
+                    
+                    def highlight_pl(val):
+                        # Ensure profit/loss has colors
+                        if isinstance(val, (int, float)):
+                            color = '#10b981' if val >= 0 else '#ef4444'
+                            return f'color: {color}; font-weight: bold;'
+                        return ''
+                    
+                    st.dataframe(
+                        df_pos.style.map(highlight_pl, subset=['GuV ($)']),
+                        use_container_width=True,
+                        hide_index=True
+                    )
+                
+                st.markdown("### ⏳ Offene Orders")
+                if not open_orders:
+                    st.info("Keine ausstehenden (offenen) Orders.")
+                else:
+                    order_list = []
+                    for o in open_orders:
+                        order_list.append({
+                            "Symbol": o.get('symbol'),
+                            "Aktion": o.get('side').upper(),
+                            "Typ": o.get('type').upper(),
+                            "Menge": float(o.get('qty', 0)),
+                            "Limit-Preis": f"${float(o.get('limit_price', 0)):.2f}" if o.get('limit_price') else "N/A",
+                            "TIF": o.get('time_in_force').upper(),
+                            "Status": o.get('status').upper(),
+                            "Erstellt am": o.get('created_at')[:19].replace('T', ' '),
+                            "ID": o.get('id')
+                        })
+                    
+                    df_ord = pd.DataFrame(order_list)
+                    st.dataframe(df_ord.drop(columns=["ID"]), use_container_width=True, hide_index=True)
+                    
+                    # Cancel order form
+                    st.markdown("#### Order stornieren")
+                    cancel_col1, cancel_col2 = st.columns([3, 1])
+                    with cancel_col1:
+                        order_to_cancel = st.selectbox(
+                            "Wählen Sie eine Order zum Stornieren:",
+                            options=[o["ID"] for o in order_list],
+                            format_func=lambda x: f"{next(item for item in order_list if item['ID'] == x)['Aktion']} {next(item for item in order_list if item['ID'] == x)['Menge']} {next(item for item in order_list if item['ID'] == x)['Symbol']} (erstellt: {next(item for item in order_list if item['ID'] == x)['Erstellt am']})"
+                        )
+                    with cancel_col2:
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        if st.button("❌ Order abbrechen", use_container_width=True):
+                            if cancel_order(order_to_cancel):
+                                st.success("Order wurde storniert.")
+                                st.rerun()
+                            else:
+                                st.error("Order konnte nicht storniert werden.")
+                                
+                    if st.button("🔥 Alle offenen Orders stornieren", use_container_width=True):
+                        if cancel_all_orders():
+                            st.success("Alle offenen Orders wurden storniert.")
+                            st.rerun()
+                        else:
+                            st.error("Fehler beim Stornieren aller Orders.")
+            
+            with order_desk_col:
+                st.markdown("### 🎛️ Trading Desk")
+                
+                # Preset symbols from watchlists or portfolio
+                suggested_symbols = set()
+                suggested_symbols.update([p.get('symbol') for p in positions])
+                suggested_symbols.update(watchlist_tickers)
+                if "screener_results" in st.session_state:
+                    suggested_symbols.update(st.session_state["screener_results"]["Symbol"].tolist())
+                # Option 2: CLO-ETFs
+                suggested_symbols.update(["JAAA", "JBBB", "CLOI", "RAAA", "RAAR"])
+                
+                trade_symbol = st.selectbox(
+                    "Wertpapier-Symbol",
+                    options=sorted(list(suggested_symbols)),
+                    key="trading_desk_symbol"
+                )
+                
+                custom_symbol = st.text_input("Anderes Ticker-Symbol eingeben:", "").strip().upper()
+                final_trade_symbol = custom_symbol if custom_symbol else trade_symbol
+                
+                if final_trade_symbol:
+                    # Show price estimate via yfinance
+                    try:
+                        price_ticker = yf.Ticker(final_trade_symbol)
+                        current_p = price_ticker.info.get('currentPrice') or price_ticker.info.get('previousClose', 0.0)
+                        st.markdown(f"**Geschätzter aktueller Preis:** `${current_p:.2f}` (über Yahoo Finance)")
+                    except Exception:
+                        current_p = 0.0
+                        st.markdown("**Geschätzter aktueller Preis:** `N/A` (yFinance nicht erreichbar)")
+                        
+                    t_side = st.radio("Transaktionsart", ["Kauf (Buy)", "Verkauf (Sell)"], horizontal=True)
+                    t_type = st.selectbox("Order-Typ", ["Market", "Limit"])
+                    
+                    t_limit_price = None
+                    if t_type == "Limit":
+                        t_limit_price = st.number_input("Limit Preis ($)", min_value=0.01, value=float(current_p) if current_p else 10.0, step=0.01)
+                        
+                    t_qty = st.number_input("Stückzahl", min_value=0.01, value=1.0, step=1.0)
+                    
+                    # Estimate total cost
+                    if current_p and t_qty:
+                        est_total = current_p * t_qty
+                        st.markdown(f"**Geschätzter Gesamtwert:** `${est_total:,.2f}`")
+                        
+                    # Execute button
+                    side_action = "buy" if "Kauf" in t_side else "sell"
+                    btn_color = "🟢" if side_action == "buy" else "🔴"
+                    
+                    if st.button(f"{btn_color} Order an Alpaca übermitteln", use_container_width=True):
+                        with st.spinner("Übermittle Order an Alpaca..."):
+                            res = place_order(
+                                symbol=final_trade_symbol,
+                                qty=t_qty,
+                                side=side_action,
+                                order_type=t_type.lower(),
+                                limit_price=t_limit_price
+                            )
+                            if res.get("status") == "success":
+                                ord_data = res.get("order", {})
+                                st.success(f"Order erfolgreich übermittelt! ID: {ord_data.get('id', 'N/A')} | Status: {ord_data.get('status', 'N/A')}")
+                                st.rerun()
+                            else:
+                                st.error(f"Fehler beim Übermitteln der Order: {res.get('message')}")
 
 # ----------------------------------------------------
 # TAB 3: PDF FINANCIAL REPORT ANALYZER

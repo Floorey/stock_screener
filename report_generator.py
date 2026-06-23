@@ -17,7 +17,8 @@ def generate_pdf_report(
     polymarket: List[Dict[str, Any]],
     analyst_notes: str,
     analyst_name: str,
-    recommendation: str
+    recommendation: str,
+    is_etf: bool = False
 ) -> io.BytesIO:
     """
     Generates a professional, print-ready PDF Investment Memo for Blackgate Capital.
@@ -139,7 +140,8 @@ def generate_pdf_report(
             Paragraph("Datum:", meta_label_style), Paragraph(current_date, meta_val_style)
         ],
         [
-            Paragraph("Symbol / Index:", meta_label_style), Paragraph(f"{symbol} ({info.get('sector', 'N/A')})", meta_val_style),
+            Paragraph("Symbol / Kategorie:", meta_label_style) if is_etf else Paragraph("Symbol / Index:", meta_label_style),
+            Paragraph(f"{symbol} ({info.get('category', 'ETF')})" if is_etf else f"{symbol} ({info.get('sector', 'N/A')})", meta_val_style),
             Paragraph("Analyst:", meta_label_style), Paragraph(analyst_name, meta_val_style)
         ],
         [
@@ -161,7 +163,10 @@ def generate_pdf_report(
     story.append(Spacer(1, 15))
     
     # 3. Business Summary Section
-    story.append(Paragraph("Unternehmensprofil & Sektor", h1_style))
+    if is_etf:
+        story.append(Paragraph("Fondsprofil & Anlagestrategie", h1_style))
+    else:
+        story.append(Paragraph("Unternehmensprofil & Sektor", h1_style))
     summary_text = info.get("longBusinessSummary", "Keine Zusammenfassung verfügbar.")
     # Limit business summary length on page 1
     if len(summary_text) > 600:
@@ -170,38 +175,84 @@ def generate_pdf_report(
     story.append(Spacer(1, 10))
     
     # 4. Fundamental Metrics Grid
-    story.append(Paragraph("Fundamentaldaten & Scores", h1_style))
-    
-    # Extract values for table
-    de_ratio = info.get("debtToEquity")
-    de_str = f"{de_ratio/100:.2f}" if de_ratio is not None else "N/A"
-    
-    metrics_data = [
-        [
-            Paragraph("<b>Metrik</b>", meta_label_style), Paragraph("<b>Wert</b>", meta_label_style),
-            Paragraph("<b>Metrik</b>", meta_label_style), Paragraph("<b>Wert</b>", meta_label_style)
-        ],
-        [
-            Paragraph("KGV (P/E)", body_style), Paragraph(str(info.get('trailingPE', 'N/A')), body_style),
-            Paragraph("Free Cash Flow (FCF)", body_style), Paragraph(f"${info.get('freeCashflow', 0):,}" if info.get('freeCashflow') else "N/A", body_style)
-        ],
-        [
-            Paragraph("KBV (P/B)", body_style), Paragraph(str(info.get('priceToBook', 'N/A')), body_style),
-            Paragraph("Debt-to-Equity (D/E)", body_style), Paragraph(de_str, body_style)
-        ],
-        [
-            Paragraph("Current Ratio", body_style), Paragraph(str(info.get('currentRatio', 'N/A')), body_style),
-            Paragraph("Eigenkapitalrendite (ROE)", body_style), Paragraph(f"{(info.get('returnOnEquity', 0)*100):.2f}%" if info.get('returnOnEquity') else "N/A", body_style)
-        ],
-        [
-            Paragraph("Umsatzwachstum (YoY)", body_style), Paragraph(f"{(info.get('revenueGrowth', 0)*100):.2f}%" if info.get('revenueGrowth') else "N/A", body_style),
-            Paragraph("Nettomarge", body_style), Paragraph(f"{(info.get('profitMargins', 0)*100):.2f}%" if info.get('profitMargins') else "N/A", body_style)
-        ],
-        [
-            Paragraph("<b>Long-Score</b>", meta_label_style), Paragraph(f"<b>{long_score} / 7</b>", rec_style if "BUY" in recommendation else meta_label_style),
-            Paragraph("<b>Short-Score</b>", meta_label_style), Paragraph(f"<b>{short_score} / 7</b>", rec_style if "SHORT" in recommendation else meta_label_style)
+    if is_etf:
+        story.append(Paragraph("ETF-Stammdaten & Kennzahlen", h1_style))
+        
+        # Extract total assets
+        assets = info.get("totalAssets") or info.get("netAssets")
+        assets_str = f"${assets:,}" if assets else "N/A"
+        
+        # Yield
+        yield_val = info.get("yield")
+        yield_str = f"{yield_val*100:.2f}%" if yield_val else "N/A"
+        
+        # Expense ratio
+        er = info.get("netExpenseRatio")
+        er_str = f"{er}%" if er is not None else "N/A"
+        
+        # YTD performance
+        ytd = info.get("ytdReturn")
+        ytd_str = f"{ytd*100:.2f}%" if ytd else "N/A"
+        
+        metrics_data = [
+            [
+                Paragraph("<b>Kennzahl (ETF)</b>", meta_label_style), Paragraph("<b>Wert</b>", meta_label_style),
+                Paragraph("<b>Kennzahl (ETF)</b>", meta_label_style), Paragraph("<b>Wert</b>", meta_label_style)
+            ],
+            [
+                Paragraph("Fonds-Anbieter", body_style), Paragraph(info.get('fundFamily', 'N/A'), body_style),
+                Paragraph("Dividendenrendite", body_style), Paragraph(yield_str, body_style)
+            ],
+            [
+                Paragraph("Kostenquote (Expense Ratio)", body_style), Paragraph(er_str, body_style),
+                Paragraph("Fonds-Kategorie", body_style), Paragraph(info.get('category', 'N/A'), body_style)
+            ],
+            [
+                Paragraph("NAV (Nettoinventarwert)", body_style), Paragraph(f"${info.get('navPrice', 0.0):.2f}" if info.get('navPrice') else "N/A", body_style),
+                Paragraph("Beta (3 Jahre)", body_style), Paragraph(str(info.get('beta3Year', 'N/A')), body_style)
+            ],
+            [
+                Paragraph("Fondsvolumen (Assets)", body_style), Paragraph(assets_str, body_style),
+                Paragraph("YTD Performance", body_style), Paragraph(ytd_str, body_style)
+            ],
+            [
+                Paragraph("Rechtstyp", body_style), Paragraph(info.get('legalType', 'N/A'), body_style),
+                Paragraph("Bewertung", body_style), Paragraph("N/A (ETF)", body_style)
+            ]
         ]
-    ]
+    else:
+        story.append(Paragraph("Fundamentaldaten & Scores", h1_style))
+        
+        # Extract values for table
+        de_ratio = info.get("debtToEquity")
+        de_str = f"{de_ratio/100:.2f}" if de_ratio is not None else "N/A"
+        
+        metrics_data = [
+            [
+                Paragraph("<b>Metrik</b>", meta_label_style), Paragraph("<b>Wert</b>", meta_label_style),
+                Paragraph("<b>Metrik</b>", meta_label_style), Paragraph("<b>Wert</b>", meta_label_style)
+            ],
+            [
+                Paragraph("KGV (P/E)", body_style), Paragraph(str(info.get('trailingPE', 'N/A')), body_style),
+                Paragraph("Free Cash Flow (FCF)", body_style), Paragraph(f"${info.get('freeCashflow', 0):,}" if info.get('freeCashflow') else "N/A", body_style)
+            ],
+            [
+                Paragraph("KBV (P/B)", body_style), Paragraph(str(info.get('priceToBook', 'N/A')), body_style),
+                Paragraph("Debt-to-Equity (D/E)", body_style), Paragraph(de_str, body_style)
+            ],
+            [
+                Paragraph("Current Ratio", body_style), Paragraph(str(info.get('currentRatio', 'N/A')), body_style),
+                Paragraph("Eigenkapitalrendite (ROE)", body_style), Paragraph(f"{(info.get('returnOnEquity', 0)*100):.2f}%" if info.get('returnOnEquity') else "N/A", body_style)
+            ],
+            [
+                Paragraph("Umsatzwachstum (YoY)", body_style), Paragraph(f"{(info.get('revenueGrowth', 0)*100):.2f}%" if info.get('revenueGrowth') else "N/A", body_style),
+                Paragraph("Nettomarge", body_style), Paragraph(f"{(info.get('profitMargins', 0)*100):.2f}%" if info.get('profitMargins') else "N/A", body_style)
+            ],
+            [
+                Paragraph("<b>Long-Score</b>", meta_label_style), Paragraph(f"<b>{long_score} / 7</b>", rec_style if "BUY" in recommendation else meta_label_style),
+                Paragraph("<b>Short-Score</b>", meta_label_style), Paragraph(f"<b>{short_score} / 7</b>", rec_style if "SHORT" in recommendation else meta_label_style)
+            ]
+        ]
     
     metrics_table = Table(metrics_data, colWidths=[2.2*inch, 1.55*inch, 2.2*inch, 1.55*inch])
     metrics_table.setStyle(TableStyle([
