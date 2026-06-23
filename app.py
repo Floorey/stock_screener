@@ -150,11 +150,19 @@ with st.sidebar.expander("🦙 Alpaca Integration (Optional)", expanded=False):
 
     # Update environment variables based on inputs
     if alpaca_key:
-        os.environ["ALPACA_API_KEY"] = alpaca_key
+        os.environ["ALPACA_API_KEY"] = alpaca_key.strip()
     if alpaca_secret:
-        os.environ["ALPACA_SECRET_KEY"] = alpaca_secret
+        os.environ["ALPACA_SECRET_KEY"] = alpaca_secret.strip()
     if alpaca_url:
-        os.environ["ALPACA_BASE_URL"] = alpaca_url
+        os.environ["ALPACA_BASE_URL"] = alpaca_url.strip()
+
+    # Visual connection status check
+    if os.getenv("ALPACA_API_KEY") or os.getenv("ALPACA_SECRET_KEY"):
+        acc_info = get_account_info()
+        if acc_info and "status" in acc_info:
+            st.success(f"🟢 Alpaca ({acc_info.get('status')}) verbunden!")
+        else:
+            st.error("🔴 Fehler: Verbindung schlug fehl. Bitte prüfen Sie Ihre API Keys und die Base URL (Live vs. Paper).")
 
 # Trigger scan button
 start_scan = st.sidebar.button("🔍 Screener starten")

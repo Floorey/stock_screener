@@ -11,6 +11,15 @@ def get_alpaca_credentials() -> tuple[Optional[str], Optional[str], str]:
     api_key = os.getenv("ALPACA_API_KEY")
     secret_key = os.getenv("ALPACA_SECRET_KEY")
     base_url = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+    
+    # Strip any potential leading/trailing whitespace
+    if api_key:
+        api_key = api_key.strip()
+    if secret_key:
+        secret_key = secret_key.strip()
+    if base_url:
+        base_url = base_url.strip()
+        
     return api_key, secret_key, base_url
 
 def get_alpaca_headers() -> Dict[str, str]:
