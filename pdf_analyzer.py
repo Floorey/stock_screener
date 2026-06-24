@@ -1,6 +1,9 @@
 import re
 import pypdf
 from typing import Dict, List, Any, Union
+import requests
+import lxml.html
+import yfinance as yf
 
 def extract_text_from_pdf(pdf_file) -> List[Dict[str, Any]]:
     """
@@ -99,3 +102,72 @@ def scan_for_financial_metrics(pages_data: List[Dict[str, Any]]) -> Dict[str, Li
                         break # Only match one alias per line
                         
     return findings
+
+def fetch_sec_filings(ticker_symbol: str) -> List[Dict[str, Any]]:
+    """
+    Fetches the list of SEC filings for a ticker symbol using yfinance.
+    Returns a list of dicts with keys 'date', 'type', 'title', 'url'.
+    """
+    ticker = yf.Ticker(ticker_symbol)
+    filings = []
+    try:
+        raw_filings = ticker.sec_filings
+        if raw_filings:
+            for f in raw_filings:
+                exhibits = f.get("exhibits", {})
+                url = None
+                ftype = f.get("type", "")
+                
+                # Prefer the main filing type exhibit (e.g. '10-K' or '10-Q')
+                if ftype in exhibits:
+                    url = exhibits[ftype]
+                elif "10-K" in exhibits:
+                    url = exhibits["10-K"]
+                elif "10-Q" in exhibits:
+                    url = exhibits["10-Q"]
+                elif exhibits:
+                    url = list(exhibits.values())[0]
+                    
+                if url:
+                    filings.append({
+                        "date": str(f.get("date", "N/A")),
+                        "type": ftype,
+                        "title": f.get("title", ftype),
+                        "url": url
+                    })
+    except Exception:
+        pass
+    return filings
+
+def download_and_parse_filing(url: str) -> List[Dict[str, Any]]:
+    """
+    Downloads the HTML filing from the URL, extracts the text content,
+    and returns a list of dictionaries with 'page_number' and 'content'
+    by chunking the text into pseudo-pages.
+    """
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    response = requests.get(url, headers=headers)
+    response.raise_for_status()
+    
+    # Parse HTML text
+    root = lxml.html.fromstring(response.content)
+    text = root.text_content()
+    
+    # Clean text: remove empty lines and strip whitespace
+    lines = [line.strip() for line in text.split("\n")]
+    non_empty_lines = [line for line in lines if line]
+    
+    pages_data = []
+    lines_per_page = 60
+    for i in range(0, len(non_empty_lines), lines_per_page):
+        page_num = (i // lines_per_page) + 1
+        page_lines = non_empty_lines[i : i + lines_per_page]
+        pages_data.append({
+            "page_number": page_num,
+            "content": "\n".join(page_lines)
+        })
+        
+    return pages_data
+

@@ -5,7 +5,13 @@ import sys
 import io
 import yfinance as yf
 from screener import run_screener, get_single_ticker_data, calculate_scores
-from pdf_analyzer import extract_text_from_pdf, search_keywords_in_pdf, scan_for_financial_metrics
+from pdf_analyzer import (
+    extract_text_from_pdf,
+    search_keywords_in_pdf,
+    scan_for_financial_metrics,
+    fetch_sec_filings,
+    download_and_parse_filing
+)
 from watchlist_manager import load_watchlist, add_to_watchlist, remove_from_watchlist
 from macro_fetcher import fetch_macro_futures, search_polymarket_markets, fetch_company_news, fetch_wsb_trending
 from report_generator import generate_pdf_report
@@ -1107,74 +1113,189 @@ with tab_trade:
 # TAB 3: PDF FINANCIAL REPORT ANALYZER
 # ----------------------------------------------------
 with tab3:
-    st.markdown("### 📄 PDF Finanzberichte Einlesen & Filtern")
-    st.markdown("Laden Sie Geschäftsberichte (10-K, 10-Q) hoch, um gezielt nach Fundamentaldaten oder qualitativen Aussagen zu scannen.")
+    st.markdown("### 📄 Finanzberichte Einlesen & Analysieren")
+    st.markdown("Laden Sie Geschäftsberichte (10-K, 10-Q) automatisch über Yahoo Finance oder laden Sie eine eigene PDF-Datei hoch, um gezielt nach Fundamentaldaten oder Begriffen zu scannen.")
     
-    uploaded_file = st.file_uploader("PDF-Finanzbericht hochladen", type="pdf")
+    # Selection of source
+    report_source = st.radio(
+        "Quelle des Finanzberichts",
+        ["Yahoo Finance (Automatisch laden)", "Eigene PDF-Datei hochladen (Manuell)"],
+        horizontal=True
+    )
     
-    if uploaded_file is not None:
-        # Load PDF details
-        with st.spinner("Extrahiere Text aus PDF-Seiten..."):
-            try:
-                pdf_bytes = io.BytesIO(uploaded_file.read())
-                pages_data = extract_text_from_pdf(pdf_bytes)
+    # Initialize session state variables if they do not exist
+    if "pages_data" not in st.session_state:
+        st.session_state["pages_data"] = None
+    if "loaded_report_name" not in st.session_state:
+        st.session_state["loaded_report_name"] = ""
+        
+    if report_source == "Yahoo Finance (Automatisch laden)":
+        # Get active symbols from watchlists/screener
+        available_symbols = set()
+        if "screener_results" in st.session_state:
+            available_symbols.update(st.session_state["screener_results"]["Symbol"].tolist())
+        available_symbols.update(load_watchlist())
+        available_symbols.update(["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA"]) # some defaults
+        
+        # Select ticker symbol
+        col_t1, col_t2 = st.columns([2, 1])
+        with col_t1:
+            selected_symbol = st.selectbox(
+                "Wählen Sie ein Symbol aus Ihren Watchlists/Scans:",
+                options=sorted(list(available_symbols)),
+                key="sec_ticker_select"
+            )
+        with col_t2:
+            manual_symbol = st.text_input("Oder Ticker manuell eingeben:", key="sec_ticker_manual").strip().upper()
+            
+        ticker_to_load = manual_symbol if manual_symbol else selected_symbol
+        
+        if ticker_to_load:
+            # Dropdown options for report types
+            report_type_filter = st.selectbox(
+                "Filter für Berichtstyp",
+                ["Nur Hauptberichte (10-K / 10-Q)", "Alle Berichte (10-K, 10-Q, 8-K, SD, etc.)"]
+            )
+            
+            # Fetch filings button
+            if st.button("🔌 Verfügbare Berichte abrufen"):
+                with st.spinner(f"Rufe Berichte für {ticker_to_load} von Yahoo Finance ab..."):
+                    filings_list = fetch_sec_filings(ticker_to_load)
+                    if filings_list:
+                        st.session_state["available_filings"] = filings_list
+                        st.session_state["available_filings_ticker"] = ticker_to_load
+                        st.success(f"{len(filings_list)} Berichte für {ticker_to_load} gefunden!")
+                    else:
+                        st.error(f"Keine Berichte für Ticker {ticker_to_load} gefunden oder Fehler beim Abrufen.")
+                        
+            # Show dropdown if filings were fetched and match current ticker
+            if "available_filings" in st.session_state and st.session_state.get("available_filings_ticker") == ticker_to_load:
+                filings_list = st.session_state["available_filings"]
                 
-                if not pages_data:
-                    st.error("Text konnte nicht extrahiert werden. Möglicherweise ist das PDF passwortgeschützt, bildbasiert oder leer.")
-                else:
-                    st.success(f"Erfolgreich {len(pages_data)} Seiten eingelesen!")
+                # Filter if needed
+                if report_type_filter == "Nur Hauptberichte (10-K / 10-Q)":
+                    filings_list = [f for f in filings_list if f["type"] in ["10-K", "10-Q"]]
                     
-                    # Interactive functions
-                    analysis_mode = st.radio(
-                        "Analyse-Modus wählen",
-                        ["Automatischer Scan nach Schlüsseldaten", "Stichwortsuche (Keywords)"]
+                if not filings_list:
+                    st.warning("Keine Berichte entsprechen dem gewählten Filter.")
+                else:
+                    # Select report
+                    report_options = [
+                        f"{f['date']} | {f['type']} | {f['title']}" for f in filings_list
+                    ]
+                    selected_report_str = st.selectbox(
+                        "Wählen Sie den zu analysierenden Bericht:",
+                        options=report_options
                     )
                     
-                    # Option 1: Automated Financial Scan
-                    if analysis_mode == "Automatischer Scan nach Schlüsseldaten":
-                        st.markdown("### 🔍 Gefundene Finanzzahlen im Bericht")
-                        st.info("Dieses Tool scannt Zeilen mit Zahlen, die typische Finanzbegriffe wie 'Revenue', 'Net Income', 'Operating Cash Flow' oder 'Debt' enthalten.")
-                        
-                        findings = scan_for_financial_metrics(pages_data)
-                        
-                        for metric, items in findings.items():
-                            with st.expander(f"📌 {metric} (Gefundene Treffer: {len(items)})"):
-                                if not items:
-                                    st.write("Keine direkten Treffer gefunden.")
+                    selected_index = report_options.index(selected_report_str)
+                    selected_filing = filings_list[selected_index]
+                    
+                    if st.button("⚡ Bericht laden & analysieren"):
+                        with st.spinner("Lade Bericht herunter und extrahiere Text..."):
+                            try:
+                                pages_data = download_and_parse_filing(selected_filing["url"])
+                                if pages_data:
+                                    st.session_state["pages_data"] = pages_data
+                                    st.session_state["loaded_report_name"] = f"{ticker_to_load} {selected_filing['type']} ({selected_filing['date']})"
+                                    st.success(f"Erfolgreich geladen! {len(pages_data)} Abschnitte eingelesen.")
+                                    st.rerun()
                                 else:
-                                    for item in items:
-                                        st.markdown(f"**Seite {item['page']}:** `{item['line']}`")
-                                        
-                    # Option 2: Custom Keyword Search
-                    elif analysis_mode == "Stichwortsuche (Keywords)":
-                        st.markdown("### 🔑 Stichwortsuche im Bericht")
-                        
-                        keyword_input = st.text_input(
-                            "Geben Sie Suchbegriffe ein (kommagetrennt, z.B. debt, Schulden, risk, Risiko, outlook, Prognose):",
-                            "debt, Schulden, risk, Risiko, revenue, Umsatz"
-                        )
-                        
-                        keywords = [k.strip() for k in keyword_input.split(",") if k.strip()]
-                        
-                        if keywords:
-                            with st.spinner("Durchsuche Bericht..."):
-                                matches = search_keywords_in_pdf(pages_data, keywords)
+                                    st.error("Text konnte nicht aus dem Bericht extrahiert werden.")
+                            except Exception as e:
+                                st.error(f"Fehler beim Herunterladen des Berichts: {e}")
                                 
-                            st.write(f"Insgesamt **{len(matches)} Treffer** für die Begriffe `{keywords}` gefunden:")
+    else: # Eigene PDF-Datei hochladen (Manuell)
+        uploaded_file = st.file_uploader("PDF-Finanzbericht hochladen", type="pdf")
+        if uploaded_file is not None:
+            pdf_id = f"pdf_{uploaded_file.name}_{uploaded_file.size}"
+            if st.session_state.get("loaded_report_name") != pdf_id:
+                with st.spinner("Extrahiere Text aus PDF-Seiten..."):
+                    try:
+                        pdf_bytes = io.BytesIO(uploaded_file.read())
+                        pages_data = extract_text_from_pdf(pdf_bytes)
+                        if pages_data:
+                            st.session_state["pages_data"] = pages_data
+                            st.session_state["loaded_report_name"] = pdf_id
+                            st.session_state["loaded_report_display_name"] = uploaded_file.name
+                            st.success(f"Erfolgreich {len(pages_data)} Seiten eingelesen!")
+                            st.rerun()
+                        else:
+                            st.error("Text konnte nicht extrahiert werden.")
+                    except Exception as e:
+                        st.error(f"Fehler beim Einlesen des PDFs: {e}")
+
+    # Display report details & analysis tools if pages_data is loaded
+    if st.session_state["pages_data"] is not None:
+        display_name = st.session_state.get("loaded_report_display_name", st.session_state["loaded_report_name"])
+        if display_name.startswith("pdf_"):
+            # Clean display name for PDF
+            display_name = display_name[4:].rsplit("_", 1)[0]
+            
+        st.markdown("---")
+        st.markdown(f"📊 **Geladener Bericht:** `{display_name}` ({len(st.session_state['pages_data'])} Abschnitte/Seiten)")
+        
+        # Reset button
+        if st.button("🗑️ Bericht zurücksetzen / entfernen"):
+            st.session_state["pages_data"] = None
+            st.session_state["loaded_report_name"] = ""
+            if "loaded_report_display_name" in st.session_state:
+                del st.session_state["loaded_report_display_name"]
+            st.success("Bericht erfolgreich zurückgesetzt.")
+            st.rerun()
+            
+        # Interactive functions
+        analysis_mode = st.radio(
+            "Analyse-Modus wählen",
+            ["Automatischer Scan nach Schlüsseldaten", "Stichwortsuche (Keywords)"]
+        )
+        
+        pages_data = st.session_state["pages_data"]
+        
+        # Option 1: Automated Financial Scan
+        if analysis_mode == "Automatischer Scan nach Schlüsseldaten":
+            st.markdown("### 🔍 Gefundene Finanzzahlen im Bericht")
+            st.info("Dieses Tool scannt Zeilen mit Zahlen, die typische Finanzbegriffe wie 'Revenue', 'Net Income', 'Operating Cash Flow' oder 'Debt' enthalten.")
+            
+            findings = scan_for_financial_metrics(pages_data)
+            
+            for metric, items in findings.items():
+                with st.expander(f"📌 {metric} (Gefundene Treffer: {len(items)})"):
+                    if not items:
+                        st.write("Keine direkten Treffer gefunden.")
+                    else:
+                        for item in items:
+                            st.markdown(f"**Abschnitt/Seite {item['page']}:** `{item['line']}`")
                             
-                            # Display matches in a clean table or list
-                            if matches:
-                                matches_df = pd.DataFrame(matches)
-                                st.dataframe(matches_df, use_container_width=True)
-                                
-                                csv_matches = matches_df.to_csv(index=False).encode('utf-8')
-                                st.download_button(
-                                    "📥 Suchergebnisse herunterladen",
-                                    data=csv_matches,
-                                    file_name="pdf_search_results.csv",
-                                    mime="text/csv"
-                                )
-                            else:
-                                st.write("Keine Treffer gefunden.")
-            except Exception as e:
-                st.error(f"Fehler beim Einlesen des PDFs: {e}")
+        # Option 2: Custom Keyword Search
+        elif analysis_mode == "Stichwortsuche (Keywords)":
+            st.markdown("### 🔑 Stichwortsuche im Bericht")
+            
+            keyword_input = st.text_input(
+                "Geben Sie Suchbegriffe ein (kommagetrennt, z.B. debt, Schulden, risk, Risiko, outlook, Prognose):",
+                "debt, Schulden, risk, Risiko, revenue, Umsatz"
+            )
+            
+            keywords = [k.strip() for k in keyword_input.split(",") if k.strip()]
+            
+            if keywords:
+                with st.spinner("Durchsuche Bericht..."):
+                    matches = search_keywords_in_pdf(pages_data, keywords)
+                    
+                st.write(f"Insgesamt **{len(matches)} Treffer** für die Begriffe `{keywords}` gefunden:")
+                
+                # Display matches in a clean table or list
+                if matches:
+                    matches_df = pd.DataFrame(matches)
+                    st.dataframe(matches_df, use_container_width=True)
+                    
+                    csv_matches = matches_df.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        "📥 Suchergebnisse herunterladen",
+                        data=csv_matches,
+                        file_name="report_search_results.csv",
+                        mime="text/csv"
+                    )
+                else:
+                    st.write("Keine Treffer gefunden.")
+
