@@ -107,8 +107,17 @@ class MarketHedger:
             closest_put = puts.iloc[(puts["strike"] - target_strike).abs().argsort()[:1]].iloc[0]
             strike = closest_put["strike"]
             symbol = closest_put["contractSymbol"]
-            ask = closest_put["ask"]
             
+            # Resolve ask price with robust fallbacks
+            ask = closest_put.get("ask", 0.0)
+            mid = (closest_put.get("bid", 0.0) + closest_put.get("ask", 0.0)) / 2.0 or closest_put.get("lastPrice", 0.0)
+            if ask is None or ask <= 0 or ask != ask:
+                ask = mid
+            if ask is None or ask <= 0 or ask != ask:
+                ask = closest_put.get("lastPrice", 0.01)
+            if ask is None or ask <= 0 or ask != ask:
+                ask = 0.01
+                
             print(f"Matching contract: {symbol} at Strike ${strike:.2f} (Ask: ${ask:.2f})")
             print(f"Submitting BUY order for {qty} Put(s)...")
             status, res = place_alpaca_order(symbol, qty, "buy", "limit", ask)
@@ -159,9 +168,27 @@ class MarketHedger:
             c_symbol = c_con["contractSymbol"]
             p_symbol = p_con["contractSymbol"]
             
-            c_bid = c_con["bid"]
-            p_ask = p_con["ask"]
+            # Resolve mid prices for fallback
+            c_mid = (c_con.get("bid", 0.0) + c_con.get("ask", 0.0)) / 2.0 or c_con.get("lastPrice", 0.0)
+            p_mid = (p_con.get("bid", 0.0) + p_con.get("ask", 0.0)) / 2.0 or p_con.get("lastPrice", 0.0)
             
+            # Resolve limit prices
+            c_bid = c_con.get("bid", 0.0)
+            if c_bid is None or c_bid <= 0 or c_bid != c_bid:
+                c_bid = c_mid
+            if c_bid is None or c_bid <= 0 or c_bid != c_bid:
+                c_bid = c_con.get("lastPrice", 0.01)
+            if c_bid is None or c_bid <= 0 or c_bid != c_bid:
+                c_bid = 0.01
+                
+            p_ask = p_con.get("ask", 0.0)
+            if p_ask is None or p_ask <= 0 or p_ask != p_ask:
+                p_ask = p_mid
+            if p_ask is None or p_ask <= 0 or p_ask != p_ask:
+                p_ask = p_con.get("lastPrice", 0.01)
+            if p_ask is None or p_ask <= 0 or p_ask != p_ask:
+                p_ask = 0.01
+                
             print(f"Leg 1 (Long Put): Buy {qty} Put(s) {p_symbol} at strike ${p_con['strike']:.2f} (Ask: ${p_ask:.2f})")
             print(f"Leg 2 (Short Call): Sell {qty} Call(s) {c_symbol} at strike ${c_con['strike']:.2f} (Bid: ${c_bid:.2f})")
             

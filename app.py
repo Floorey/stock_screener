@@ -1245,6 +1245,31 @@ with tab_strat:
                     c_mid = (c_con.get("bid", 0.0) + c_con.get("ask", 0.0)) / 2.0 or c_con.get("lastPrice", 0.0)
                     p_mid = (p_con.get("bid", 0.0) + p_con.get("ask", 0.0)) / 2.0 or p_con.get("lastPrice", 0.0)
                     
+                    # Sanitize limit prices to prevent 0.0 / NaN values
+                    c_bid = c_con.get("bid") if c_con.get("bid") and c_con.get("bid") > 0 else c_mid
+                    if not c_bid or pd.isna(c_bid) or c_bid <= 0:
+                        c_bid = c_con.get("lastPrice", 0.01)
+                    if not c_bid or pd.isna(c_bid) or c_bid <= 0:
+                        c_bid = 0.01
+
+                    c_ask = c_con.get("ask") if c_con.get("ask") and c_con.get("ask") > 0 else c_mid
+                    if not c_ask or pd.isna(c_ask) or c_ask <= 0:
+                        c_ask = c_con.get("lastPrice", 0.01)
+                    if not c_ask or pd.isna(c_ask) or c_ask <= 0:
+                        c_ask = 0.01
+
+                    p_bid = p_con.get("bid") if p_con.get("bid") and p_con.get("bid") > 0 else p_mid
+                    if not p_bid or pd.isna(p_bid) or p_bid <= 0:
+                        p_bid = p_con.get("lastPrice", 0.01)
+                    if not p_bid or pd.isna(p_bid) or p_bid <= 0:
+                        p_bid = 0.01
+
+                    p_ask = p_con.get("ask") if p_con.get("ask") and p_con.get("ask") > 0 else p_mid
+                    if not p_ask or pd.isna(p_ask) or p_ask <= 0:
+                        p_ask = p_con.get("lastPrice", 0.01)
+                    if not p_ask or pd.isna(p_ask) or p_ask <= 0:
+                        p_ask = 0.01
+
                     legs_data = []
                     
                     if "Option A" in strategy_choice:
@@ -1265,7 +1290,7 @@ with tab_strat:
                                     "qty": cnt,
                                     "side": "buy",
                                     "type": "limit",
-                                    "limit_price": p_con['ask']
+                                    "limit_price": p_ask
                                 }
                             },
                             {
@@ -1283,7 +1308,7 @@ with tab_strat:
                                     "qty": cnt,
                                     "side": "sell",
                                     "type": "limit",
-                                    "limit_price": c_con['bid']
+                                    "limit_price": c_bid
                                 }
                             }
                         ]
@@ -1323,7 +1348,7 @@ with tab_strat:
                                     "qty": cnt,
                                     "side": "sell",
                                     "type": "limit",
-                                    "limit_price": c_con['bid']
+                                    "limit_price": c_bid
                                 }
                             }
                         ]
@@ -1345,7 +1370,7 @@ with tab_strat:
                                     "qty": cnt,
                                     "side": "sell",
                                     "type": "limit",
-                                    "limit_price": p_con['bid']
+                                    "limit_price": p_bid
                                 }
                             }
                         ]
@@ -1357,6 +1382,12 @@ with tab_strat:
                         otm_p_symbol = otm_put.get("contractSymbol", "")
                         otm_p_mid = (otm_put.get("bid", 0.0) + otm_put.get("ask", 0.0)) / 2.0 or otm_put.get("lastPrice", 0.0)
                         
+                        otm_p_bid = otm_put.get("bid") if otm_put.get("bid") and otm_put.get("bid") > 0 else otm_p_mid
+                        if not otm_p_bid or pd.isna(otm_p_bid) or otm_p_bid <= 0:
+                            otm_p_bid = otm_put.get("lastPrice", 0.01)
+                        if not otm_p_bid or pd.isna(otm_p_bid) or otm_p_bid <= 0:
+                            otm_p_bid = 0.01
+                            
                         legs_data = [
                             {
                                 "Aktion": "KAUF (Long Put ATM)",
@@ -1373,7 +1404,7 @@ with tab_strat:
                                     "qty": cnt,
                                     "side": "buy",
                                     "type": "limit",
-                                    "limit_price": p_con['ask']
+                                    "limit_price": p_ask
                                 }
                             },
                             {
@@ -1391,7 +1422,7 @@ with tab_strat:
                                     "qty": cnt,
                                     "side": "sell",
                                     "type": "limit",
-                                    "limit_price": otm_put['bid']
+                                    "limit_price": otm_p_bid
                                 }
                             }
                         ]
