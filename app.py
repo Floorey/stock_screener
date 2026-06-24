@@ -193,12 +193,13 @@ if "macro_futures_df" in st.session_state and not st.session_state["macro_future
     )
 
 # Initialize Tabs
-tab1, tab_wl, tab_opt, tab2, tab_trade, tab3 = st.tabs([
+tab1, tab_wl, tab_opt, tab2, tab_trade, tab_strat, tab3 = st.tabs([
     "🎯 Screener Dashboard", 
     "⭐ Watchlist Manager", 
     "🎫 Options-Screener",
     "📈 Einzelwert-Analyse", 
     "💼 Alpaca Trading",
+    "⚡ Strategie-Desk (Option A)",
     "📄 PDF Finanzbericht Analyzer"
 ])
 
@@ -1110,6 +1111,395 @@ with tab_trade:
                                 st.rerun()
                             else:
                                 st.error(f"Fehler beim Übermitteln der Order: {res.get('message')}")
+
+
+# ----------------------------------------------------
+# TAB STRAT: STRATEGY DESK
+# ----------------------------------------------------
+with tab_strat:
+    st.markdown('<div class="wl-banner"><h2>⚡ Blackgate Capital Strategie-Desk (Option A & mehr)</h2></div>', unsafe_allow_html=True)
+    st.markdown("Planen und handeln Sie komplexe Optionsstrategien direkt über Ihr Alpaca-Konto. Dieses Desk ermöglicht es Ihnen, vordefinierte Strategien wie den *Synthetischen Short* auf Bonds (Option A) zu strukturieren und auszuführen.")
+    
+    # Check if Alpaca is configured
+    if not is_alpaca_configured():
+        st.warning("⚠️ Alpaca API-Schlüssel sind nicht konfiguriert. Sie können Strategien simulieren, aber nicht handeln. Bitte konfigurieren Sie die Schlüssel in der linken Seitenleiste.")
+        
+    # Strategy selection
+    strategy_choice = st.selectbox(
+        "Wählen Sie eine Strategie aus:",
+        [
+            "Option A: Synthetischer Short (Bonds Zinswette)",
+            "Covered Call / Buy-Write (Income & Upside)",
+            "Cash-Secured Put (Günstiger Einstieg)",
+            "Bear Put Spread (Definierter Risiko-Short)"
+        ]
+    )
+    
+    # Underlying ticker
+    default_ticker = "TLT" if "Option A" in strategy_choice else "AAPL"
+    
+    col_s1, col_s2 = st.columns(2)
+    with col_s1:
+        strat_ticker = st.text_input("Underlying Ticker (z.B. TLT, IEF, AAPL, NVDA):", value=default_ticker, key="strat_ticker_input").strip().upper()
+    with col_s2:
+        num_contracts = st.number_input("Anzahl Kontrakte (1 Kontrakt = 100 Aktien):", min_value=1, value=1, step=1, key="strat_num_contracts")
+        
+    # Fetch underlying price and options dates
+    underlying_price = 0.0
+    expiry_dates = []
+    
+    if strat_ticker:
+        with st.spinner(f"Lade Kursdaten für {strat_ticker}..."):
+            try:
+                tk = yf.Ticker(strat_ticker)
+                info = tk.info
+                underlying_price = info.get("currentPrice") or info.get("previousClose") or 0.0
+                expiry_dates = list(tk.options)
+            except Exception as e:
+                st.error(f"Fehler beim Laden von {strat_ticker}: {e}")
+                
+    if underlying_price > 0:
+        st.metric(f"Aktueller Kurs von {strat_ticker}", f"${underlying_price:.2f}")
+        
+        if not expiry_dates:
+            st.error(f"Keine Optionen für {strat_ticker} verfügbar.")
+        else:
+            col_s3, col_s4 = st.columns(2)
+            with col_s3:
+                selected_expiry = st.selectbox("Laufzeit (Option Expiration Date):", expiry_dates, key="strat_expiry_select")
+            with col_s4:
+                # ATM Strike suggestion
+                suggested_strike = round(underlying_price)
+                strike_price = st.number_input(
+                    "Ziel-Strike (ATM / Basispreis):",
+                    min_value=0.5,
+                    value=float(suggested_strike),
+                    step=0.5,
+                    help="Der Basispreis für die Hauptkomponente der Strategie.",
+                    key="strat_strike_input"
+                )
+                
+            # Expiry details
+            today = datetime.now().date()
+            expiry_dt = datetime.strptime(selected_expiry, "%Y-%m-%d").date()
+            days_to_expiry = max((expiry_dt - today).days, 1)
+            st.markdown(f"**Laufzeit:** {selected_expiry} ({days_to_expiry} Tage bis Verfall)")
+            
+            # Fetch option chain for selected expiry
+            if st.button("📊 Optionen simulieren & Preise abrufen", key="strat_simulate_btn"):
+                with st.spinner("Lade Optionskette und berechne Preise..."):
+                    try:
+                        chain = tk.option_chain(selected_expiry)
+                        calls_df = chain.calls
+                        puts_df = chain.puts
+                        
+                        # Find ATM / selected strike contracts
+                        call_atm = calls_df.iloc[(calls_df['strike'] - strike_price).abs().argsort()[:1]]
+                        put_atm = puts_df.iloc[(puts_df['strike'] - strike_price).abs().argsort()[:1]]
+                        
+                        if call_atm.empty or put_atm.empty:
+                            st.error("Der gewählte Strike ist nicht in der Optionskette verfügbar.")
+                        else:
+                            c_contract = call_atm.iloc[0].to_dict()
+                            p_contract = put_atm.iloc[0].to_dict()
+                            
+                            st.session_state["strat_sim_results"] = {
+                                "ticker": strat_ticker,
+                                "price": underlying_price,
+                                "expiry": selected_expiry,
+                                "days": days_to_expiry,
+                                "strike": strike_price,
+                                "call": c_contract,
+                                "put": p_contract,
+                                "contracts": num_contracts,
+                                "strategy": strategy_choice,
+                                "puts_df": puts_df.to_dict(orient="records") # store puts for spread calculation
+                            }
+                            st.success("Simulation erfolgreich abgeschlossen!")
+                    except Exception as e:
+                        st.error(f"Fehler beim Laden der Optionskette: {e}")
+                        
+            # Show simulated details if available
+            if "strat_sim_results" in st.session_state:
+                sim = st.session_state["strat_sim_results"]
+                
+                # Check if simulated ticker matches selected ticker to keep it in sync
+                if sim["ticker"] == strat_ticker and sim["expiry"] == selected_expiry:
+                    st.markdown("### 🔍 Struktur der Optionsstrategie")
+                    
+                    c_con = sim["call"]
+                    p_con = sim["put"]
+                    k_val = sim["strike"]
+                    cnt = sim["contracts"]
+                    
+                    c_symbol = c_con.get("contractSymbol", "")
+                    p_symbol = p_con.get("contractSymbol", "")
+                    
+                    c_mid = (c_con.get("bid", 0.0) + c_con.get("ask", 0.0)) / 2.0 or c_con.get("lastPrice", 0.0)
+                    p_mid = (p_con.get("bid", 0.0) + p_con.get("ask", 0.0)) / 2.0 or p_con.get("lastPrice", 0.0)
+                    
+                    legs_data = []
+                    
+                    if "Option A" in strategy_choice:
+                        # Synthetic Short: Long Put + Short Call
+                        legs_data = [
+                            {
+                                "Aktion": "KAUF (Long Put)",
+                                "Symbol": p_symbol,
+                                "Typ": "Put",
+                                "Strike": f"${p_con['strike']:.2f}",
+                                "Bid": f"${p_con['bid']:.2f}",
+                                "Ask": f"${p_con['ask']:.2f}",
+                                "Mitte-Preis": f"${p_mid:.2f}",
+                                "Effekt": "Debit (Gezahlte Prämie)",
+                                "Kosten/Einnahme": -p_mid * 100 * cnt,
+                                "Alpaca_Action": {
+                                    "symbol": p_symbol,
+                                    "qty": cnt,
+                                    "side": "buy",
+                                    "type": "limit",
+                                    "limit_price": p_con['ask']
+                                }
+                            },
+                            {
+                                "Aktion": "VERKAUF (Short Call)",
+                                "Symbol": c_symbol,
+                                "Typ": "Call",
+                                "Strike": f"${c_con['strike']:.2f}",
+                                "Bid": f"${c_con['bid']:.2f}",
+                                "Ask": f"${c_con['ask']:.2f}",
+                                "Mitte-Preis": f"${c_mid:.2f}",
+                                "Effekt": "Credit (Eingenommene Prämie)",
+                                "Kosten/Einnahme": c_mid * 100 * cnt,
+                                "Alpaca_Action": {
+                                    "symbol": c_symbol,
+                                    "qty": cnt,
+                                    "side": "sell",
+                                    "type": "limit",
+                                    "limit_price": c_con['bid']
+                                }
+                            }
+                        ]
+                    elif "Covered Call" in strategy_choice:
+                        # Covered Call: Long Stock + Short Call
+                        legs_data = [
+                            {
+                                "Aktion": "KAUF (Stock)",
+                                "Symbol": strat_ticker,
+                                "Typ": "Aktie",
+                                "Strike": "N/A",
+                                "Bid": "N/A",
+                                "Ask": "N/A",
+                                "Mitte-Preis": f"${underlying_price:.2f}",
+                                "Effekt": "Debit (Kauf Aktien)",
+                                "Kosten/Einnahme": -underlying_price * 100 * cnt,
+                                "Alpaca_Action": {
+                                    "symbol": strat_ticker,
+                                    "qty": cnt * 100,
+                                    "side": "buy",
+                                    "type": "market",
+                                    "limit_price": None
+                                }
+                            },
+                            {
+                                "Aktion": "VERKAUF (Short Call)",
+                                "Symbol": c_symbol,
+                                "Typ": "Call",
+                                "Strike": f"${c_con['strike']:.2f}",
+                                "Bid": f"${c_con['bid']:.2f}",
+                                "Ask": f"${c_con['ask']:.2f}",
+                                "Mitte-Preis": f"${c_mid:.2f}",
+                                "Effekt": "Credit (Eingenommene Prämie)",
+                                "Kosten/Einnahme": c_mid * 100 * cnt,
+                                "Alpaca_Action": {
+                                    "symbol": c_symbol,
+                                    "qty": cnt,
+                                    "side": "sell",
+                                    "type": "limit",
+                                    "limit_price": c_con['bid']
+                                }
+                            }
+                        ]
+                    elif "Cash-Secured Put" in strategy_choice:
+                        # Cash-Secured Put: Short Put
+                        legs_data = [
+                            {
+                                "Aktion": "VERKAUF (Short Put)",
+                                "Symbol": p_symbol,
+                                "Typ": "Put",
+                                "Strike": f"${p_con['strike']:.2f}",
+                                "Bid": f"${p_con['bid']:.2f}",
+                                "Ask": f"${p_con['ask']:.2f}",
+                                "Mitte-Preis": f"${p_mid:.2f}",
+                                "Effekt": "Credit (Eingenommene Prämie)",
+                                "Kosten/Einnahme": p_mid * 100 * cnt,
+                                "Alpaca_Action": {
+                                    "symbol": p_symbol,
+                                    "qty": cnt,
+                                    "side": "sell",
+                                    "type": "limit",
+                                    "limit_price": p_con['bid']
+                                }
+                            }
+                        ]
+                    elif "Bear Put Spread" in strategy_choice:
+                        # Bear Put Spread: Long Put ATM + Short Put OTM (e.g. 10% lower)
+                        puts_df = pd.DataFrame(sim["puts_df"])
+                        otm_strike_target = strike_price * 0.90
+                        otm_put = puts_df.iloc[(puts_df['strike'] - otm_strike_target).abs().argsort()[:1]].iloc[0].to_dict()
+                        otm_p_symbol = otm_put.get("contractSymbol", "")
+                        otm_p_mid = (otm_put.get("bid", 0.0) + otm_put.get("ask", 0.0)) / 2.0 or otm_put.get("lastPrice", 0.0)
+                        
+                        legs_data = [
+                            {
+                                "Aktion": "KAUF (Long Put ATM)",
+                                "Symbol": p_symbol,
+                                "Typ": "Put",
+                                "Strike": f"${p_con['strike']:.2f}",
+                                "Bid": f"${p_con['bid']:.2f}",
+                                "Ask": f"${p_con['ask']:.2f}",
+                                "Mitte-Preis": f"${p_mid:.2f}",
+                                "Effekt": "Debit (Gezahlte Prämie)",
+                                "Kosten/Einnahme": -p_mid * 100 * cnt,
+                                "Alpaca_Action": {
+                                    "symbol": p_symbol,
+                                    "qty": cnt,
+                                    "side": "buy",
+                                    "type": "limit",
+                                    "limit_price": p_con['ask']
+                                }
+                            },
+                            {
+                                "Aktion": "VERKAUF (Short Put OTM)",
+                                "Symbol": otm_p_symbol,
+                                "Typ": "Put",
+                                "Strike": f"${otm_put['strike']:.2f}",
+                                "Bid": f"${otm_put['bid']:.2f}",
+                                "Ask": f"${otm_put['ask']:.2f}",
+                                "Mitte-Preis": f"${otm_p_mid:.2f}",
+                                "Effekt": "Credit (Eingenommene Prämie)",
+                                "Kosten/Einnahme": otm_p_mid * 100 * cnt,
+                                "Alpaca_Action": {
+                                    "symbol": otm_p_symbol,
+                                    "qty": cnt,
+                                    "side": "sell",
+                                    "type": "limit",
+                                    "limit_price": otm_put['bid']
+                                }
+                            }
+                        ]
+                    
+                    # Display Table
+                    df_legs = pd.DataFrame(legs_data).drop(columns=["Alpaca_Action"])
+                    st.table(df_legs)
+                    
+                    # Calculate Totals
+                    total_cash_flow = sum(leg["Kosten/Einnahme"] for leg in legs_data)
+                    net_type = "Einnahme (Net Credit)" if total_cash_flow >= 0 else "Kosten (Net Debit)"
+                    
+                    st.markdown("#### ⚖️ Strategie-Metriken & Zusammenfassung")
+                    c_flow_col1, c_flow_col2, c_flow_col3 = st.columns(3)
+                    with c_flow_col1:
+                        st.metric("Netto Cashflow (Einstieg)", f"${abs(total_cash_flow):,.2f}", delta=net_type, delta_color="normal" if total_cash_flow >= 0 else "inverse")
+                    with c_flow_col2:
+                        if "Option A" in strategy_choice:
+                            st.metric("Gesamt-Delta", "-1.00", help="100% Short-Replikation des Underlyings.")
+                        elif "Covered Call" in strategy_choice:
+                            st.metric("Gesamt-Delta", "ca. +0.75", help="Aktie (+1.00) minus Call (ca. -0.25)")
+                        elif "Cash-Secured Put" in strategy_choice:
+                            st.metric("Gesamt-Delta", "ca. +0.20", help="Short Put hat ein positives Delta.")
+                        elif "Bear Put Spread" in strategy_choice:
+                            st.metric("Gesamt-Delta", "ca. -0.30", help="Differenz der Deltas der Puts.")
+                    with c_flow_col3:
+                        if "Option A" in strategy_choice:
+                            st.metric("Maximales Risiko", "Unbegrenzt", help="Ungedeckelter Call-Short birgt theoretisch unbegrenztes Risiko nach oben. Stop-Loss von 5% über dem Strike einrichten!")
+                        elif "Covered Call" in strategy_choice:
+                            st.metric("Maximales Risiko", f"${underlying_price * 100 * cnt:,.2f}", help="Maximaler Verlust, falls die Aktie auf 0 fällt.")
+                        elif "Cash-Secured Put" in strategy_choice:
+                            st.metric("Maximales Risiko", f"${k_val * 100 * cnt:,.2f}", help="Erwerb der Aktie zum Strike-Preis bei Totalverlust.")
+                        elif "Bear Put Spread" in strategy_choice:
+                            max_spread_loss = abs(total_cash_flow)
+                            st.metric("Maximales Risiko (Gedeckelt)", f"${max_spread_loss:,.2f}", help="Begrenzt auf den Net Debit.")
+                            
+                    # Detailed Strategy Description
+                    st.markdown("#### 📝 Trade-Beschreibung & Investment-These")
+                    if "Option A" in strategy_choice:
+                        st.markdown(f"""
+                        **Option A: Synthetischer Short auf US-Anleihen (TLT/IEF)**
+                        * **These:** Basierend auf dem Research-Memo `Blackgate_Macro_Memo_Option_A.pdf` zeigen hartnäckige Inflation und steigende US-Staatsverschuldung Aufwärtsdruck auf die Anleiherenditen. Da Anleihekurse mathematisch fallen, wenn die Zinsen steigen, ist der Short-Bond die direkte Wette.
+                        * **Mechanik:** Der Kauf des ATM Puts ({p_symbol}) sichert den Kursgewinn bei fallendem Preis. Der zeitgleiche Verkauf des ATM Calls ({c_symbol}) finanziert den Put vollständig (Netto-Einstiegskosten liegen nahe $0.00). 1:1 Partizipation an fallenden Kursen ohne tägliche Borrow-Gebühren (Leihgebühren) oder Short Squeeze Risiken des physischen Leerverkaufs.
+                        * **Absicherung (Stop-Loss):** Falls TLT/IEF um mehr als 5% über den Strike-Kurs (${k_val:.2f}) steigt, sollte die Position manuell geschlossen werden, da der ungedeckte Short Call ein unbegrenztes Risiko darstellt.
+                        """)
+                    elif "Covered Call" in strategy_choice:
+                        st.markdown(f"""
+                        **Covered Call / Buy-Write**
+                        * **These:** Moderate Aufwärtsbewegung oder Seitwärtsphase des Underlyings.
+                        * **Mechanik:** Sie erwerben 100 Aktien von {strat_ticker} zum Kurs von ${underlying_price:.2f} und verkaufen zeitgleich eine Call-Option ({c_symbol}) mit Strike ${k_val:.2f}. Die eingenommene Prämie erhöht die Rendite Ihres Aktienbestands.
+                        * **Ausgang:** Steigt die Aktie über ${k_val:.2f}, werden Ihre Aktien zum Strike verkauft (Gewinn deckelt bei Strike + Prämie). Bleibt sie darunter, behalten Sie die Aktien und die Prämie.
+                        """)
+                    elif "Cash-Secured Put" in strategy_choice:
+                        st.markdown(f"""
+                        **Cash-Secured Put**
+                        * **These:** Hohe Qualität der Aktie und Wunsch, zu einem günstigeren Preis einzusteigen.
+                        * **Mechanik:** Sie verkaufen eine OTM Put-Option ({p_symbol}) mit Strike ${k_val:.2f}. Sie nehmen sofort die Prämie ein. Fällt die Aktie unter ${k_val:.2f}, kaufen Sie 100 Aktien je Kontrakt zum Strike (Ihr effektiver Einstiegspreis sinkt um die eingenommene Prämie).
+                        """)
+                    elif "Bear Put Spread" in strategy_choice:
+                        st.markdown(f"""
+                        **Bear Put Spread**
+                        * **These:** Fallende Kurse des Underlyings bei begrenztem Risiko und niedrigeren Einstiegskosten.
+                        * **Mechanik:** Sie kaufen den Put ({p_symbol}) und verkaufen einen günstigeren OTM Put. Die Kosten des Trades sinken. 
+                        * **Gewinn/Verlust:** Maximaler Verlust ist der Netto-Debit. Maximaler Gewinn ist die Differenz der Strikes abzüglich des Debits.
+                        """)
+                        
+                    # Execution
+                    st.markdown("---")
+                    st.markdown("### 🚀 Trade ausführen")
+                    
+                    if not is_alpaca_configured():
+                        st.error("Alpaca ist nicht konfiguriert. Ausführung deaktiviert.")
+                    else:
+                        account_mode = "PAPER"
+                        api_key, _, base_url = get_alpaca_credentials()
+                        if "live" in base_url.lower():
+                            account_mode = "LIVE"
+                            st.warning("⚠️ ACHTUNG: Dies ist ein LIVE-Konto. Ein Klick auf den Button führt zu echtem Geldhandel!")
+                        else:
+                            st.info("🟢 Handel im Alpaca PAPER (Test) Modus.")
+                            
+                        # Confirm execution checkbox
+                        confirm_trade = st.checkbox("Ich bestätige, dass ich diesen Trade auf Alpaca ausführen möchte.", value=False, key="confirm_strat_execution")
+                        
+                        if st.button("🚀 Strategie-Order an Alpaca senden", key="strat_execute_orders_btn"):
+                            if not confirm_trade:
+                                st.error("Bitte bestätigen Sie die Ausführung über die Checkbox oben.")
+                            else:
+                                with st.spinner("Sende Orders an Alpaca..."):
+                                    responses = []
+                                    success_count = 0
+                                    for leg in legs_data:
+                                        act = leg["Alpaca_Action"]
+                                        res = place_order(
+                                            symbol=act["symbol"],
+                                            qty=act["qty"],
+                                            side=act["side"],
+                                            order_type=act["type"],
+                                            limit_price=act["limit_price"]
+                                        )
+                                        responses.append((leg["Aktion"], res))
+                                        if res.get("status") == "success":
+                                            success_count += 1
+                                            
+                                    # Show results
+                                    if success_count == len(legs_data):
+                                        st.success("🔥 Alle Orders der Strategie wurden erfolgreich an Alpaca übermittelt!")
+                                    else:
+                                        st.warning(f"Einige Orders konnten nicht platziert werden ({success_count}/{len(legs_data)} erfolgreich). Details unten.")
+                                        
+                                    for title, res in responses:
+                                        if res.get("status") == "success":
+                                            st.success(f"🟢 **{title}**: Platziert! ID: {res['order']['id']} (Status: {res['order']['status']})")
+                                        else:
+                                            st.error(f"🔴 **{title}**: Fehler: {res.get('message')}")
 
 # ----------------------------------------------------
 # TAB 3: PDF FINANCIAL REPORT ANALYZER

@@ -19,6 +19,14 @@ def get_alpaca_credentials() -> tuple[Optional[str], Optional[str], str]:
         secret_key = secret_key.strip()
     if base_url:
         base_url = base_url.strip()
+        # Clean trailing slashes
+        if base_url.endswith("/"):
+            base_url = base_url[:-1]
+        # Clean trailing /v2
+        if base_url.endswith("/v2"):
+            base_url = base_url[:-3]
+        if base_url.endswith("/"):
+            base_url = base_url[:-1]
         
     return api_key, secret_key, base_url
 
