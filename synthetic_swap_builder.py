@@ -82,6 +82,18 @@ def execute_synthetic_swap(ticker: str, direction: str, qty: int, strike: float 
         print("Error: Alpaca API Keys not configured in .env!")
         return False
         
+    # Get available buying power
+    opt_bp = 999999.0
+    try:
+        acc_url = f"{BASE_URL}/v2/account"
+        acc_res = requests.get(acc_url, headers=headers, timeout=10)
+        if acc_res.status_code == 200:
+            acc_data = acc_res.json()
+            opt_bp = float(acc_data.get("options_buying_power") or acc_data.get("buying_power") or acc_data.get("cash", 0.0))
+            print(f"Available Options Buying Power: ${opt_bp:,.2f}")
+    except Exception as e:
+        pass
+        
     tk = yf.Ticker(ticker)
     
     # 1. Resolve current price of underlying
@@ -116,6 +128,19 @@ def execute_synthetic_swap(ticker: str, direction: str, qty: int, strike: float 
                 
     print(f"Target Strike: ${strike:.2f}")
     print(f"Expiration Date: {expiry}")
+    
+    # Pre-check buying power requirement for Short Put in Synthetic Long
+    required_bp = 0.0
+    if direction == "long":
+        # Synthetic Long requires selling a Put at strike, which requires Strike * 100 * Qty collateral
+        required_bp = strike * 100.0 * qty
+        
+    if required_bp > opt_bp:
+        print(f"\n❌ ERROR: Insufficient options buying power!")
+        print(f"  -> Required Collateral (Short Put): ${required_bp:,.2f}")
+        print(f"  -> Available Buying Power (Alpaca):  ${opt_bp:,.2f}")
+        print(f"Aborting execution to prevent incomplete leg execution (e.g. buying the Call but failing to sell the Put).")
+        return False
     
     # 4. Fetch option chain details
     try:

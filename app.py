@@ -1504,10 +1504,46 @@ with tab_strat:
                         else:
                             st.info("🟢 Handel im Alpaca PAPER (Test) Modus.")
                             
+                        # Pre-check buying power
+                        acc_info = get_account_info()
+                        opt_bp = 0.0
+                        required_bp = 0.0
+                        is_disabled = False
+                        
+                        if acc_info:
+                            opt_bp = float(acc_info.get("options_buying_power") or acc_info.get("buying_power") or acc_info.get("cash", 0.0))
+                            
+                            # Estimate required buying power for the strategy
+                            if "Cash-Secured Put" in strategy_choice:
+                                # 100% collateral for Short Put
+                                strike_val = p_con['strike']
+                                required_bp = strike_val * 100.0 * cnt
+                            elif "Option A" in strategy_choice:
+                                # Option A is a Synthetic Short: Long Put + Short Call
+                                # Naked Call margin is roughly 20% of strike * 100 * contracts (Alpaca requirement)
+                                strike_val = c_con['strike']
+                                required_bp = (strike_val * 100.0 * cnt) * 0.20
+                            elif "Bear Put Spread" in strategy_choice:
+                                # Collateral is the width of the strikes (ATM Put strike - OTM Put strike)
+                                try:
+                                    strike_val_atm = p_con['strike']
+                                    strike_val_otm = otm_put['strike']
+                                    required_bp = abs(strike_val_atm - strike_val_otm) * 100.0 * cnt
+                                except Exception:
+                                    required_bp = 1000.0 * cnt
+                                    
+                            if required_bp > 0:
+                                st.write(f"💼 **Options-Kaufkraft:** Verfügbar: `${opt_bp:,.2f}` | Benötigt (geschätzt): `${required_bp:,.2f}`")
+                                if opt_bp < required_bp:
+                                    st.error(f"❌ **Ungenügende Options-Kaufkraft!** Dieser Trade benötigt ca. `${required_bp:,.2f}` als Margin/Collateral. Ihr Konto hat nur `${opt_bp:,.2f}`.")
+                                    is_disabled = True
+                            else:
+                                st.write(f"💼 **Options-Kaufkraft:** Verfügbar: `${opt_bp:,.2f}`")
+                                
                         # Confirm execution checkbox
                         confirm_trade = st.checkbox("Ich bestätige, dass ich diesen Trade auf Alpaca ausführen möchte.", value=False, key="confirm_strat_execution")
                         
-                        if st.button("🚀 Strategie-Order an Alpaca senden", key="strat_execute_orders_btn"):
+                        if st.button("🚀 Strategie-Order an Alpaca senden", key="strat_execute_orders_btn", disabled=is_disabled):
                             if not confirm_trade:
                                 st.error("Bitte bestätigen Sie die Ausführung über die Checkbox oben.")
                             else:
