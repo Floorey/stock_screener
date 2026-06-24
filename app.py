@@ -1553,7 +1553,8 @@ with tab_strat:
             "short_nasdaq.py (NASDAQ Short Hedge)",
             "short_sp500.py (S&P 500 Short Hedge)",
             "short_russell.py (Russell 2000 Short Hedge)",
-            "risk_manager.py (Portfolio Risk Analyzer)"
+            "risk_manager.py (Portfolio Risk Analyzer)",
+            "synthetic_swap_builder.py (Synthetic Swap Builder)"
         ],
         key="selected_single_script"
     )
@@ -1590,6 +1591,54 @@ with tab_strat:
             )
             if type_val == "put":
                 cmd_args += ["--otm", f"{run_otm:.1f}"]
+                
+    elif "synthetic_swap_builder.py" in script_choice:
+        col_s1, col_s2, col_s3 = st.columns(3)
+        with col_s1:
+            sw_ticker = st.text_input(
+                "Basiswert Ticker (Aktie/ETF):",
+                value="AAPL",
+                key="sw_ticker_input"
+            ).upper().strip()
+            cmd_args += ["--ticker", sw_ticker]
+        with col_s2:
+            sw_dir = st.selectbox(
+                "Richtung (Long/Short):",
+                ["long (Synthetic Long)", "short (Synthetic Short)"],
+                key="sw_dir_select"
+            )
+            dir_val = sw_dir.split()[0]
+            cmd_args += ["--direction", dir_val]
+        with col_s3:
+            sw_qty = st.number_input(
+                "Menge/Kontrakte (je 100 Aktien):",
+                min_value=1,
+                value=1,
+                step=1,
+                key="sw_qty_input"
+            )
+            cmd_args += ["--qty", str(sw_qty)]
+            
+        col_s4, col_s5 = st.columns(2)
+        with col_s4:
+            sw_strike = st.text_input(
+                "Basispreis (Strike) [Optional, leer lassen für ATM]:",
+                value="",
+                key="sw_strike_input"
+            ).strip()
+            if sw_strike:
+                try:
+                    cmd_args += ["--strike", str(float(sw_strike))]
+                except ValueError:
+                    st.warning("Bitte geben Sie eine gültige Zahl für den Strike ein (oder leer lassen).")
+        with col_s5:
+            sw_expiry = st.text_input(
+                "Ablaufdatum (YYYY-MM-DD) [Optional, leer lassen für ca. 30 Tage DTE]:",
+                value="",
+                key="sw_expiry_input"
+            ).strip()
+            if sw_expiry:
+                cmd_args += ["--expiry", sw_expiry]
                 
     if st.button("🚀 Skript jetzt ausführen", key="execute_single_script_btn"):
         script_filename = script_choice.split()[0]
