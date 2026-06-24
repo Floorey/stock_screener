@@ -1130,6 +1130,8 @@ with tab3:
         st.session_state["loaded_report_name"] = ""
         
     if report_source == "Yahoo Finance (Automatisch laden)":
+        st.info("💡 **Hinweis:** SEC-Finanzberichte (10-K, 10-Q) stehen primär für **US-amerikanische Unternehmen** zur Verfügung. Für europäische oder asiatische Aktien (wie z.B. SAP, ASML, BMW) verwenden Sie bitte die manuelle PDF-Upload-Option.")
+        
         # Get active symbols from watchlists/screener
         available_symbols = set()
         if "screener_results" in st.session_state:
@@ -1146,7 +1148,7 @@ with tab3:
                 key="sec_ticker_select"
             )
         with col_t2:
-            manual_symbol = st.text_input("Oder Ticker manuell eingeben:", key="sec_ticker_manual").strip().upper()
+            manual_symbol = st.text_input("Oder Ticker manuell eingeben (z.B. TSLA):", key="sec_ticker_manual").strip().upper()
             
         ticker_to_load = manual_symbol if manual_symbol else selected_symbol
         
@@ -1166,9 +1168,11 @@ with tab3:
                         st.session_state["available_filings_ticker"] = ticker_to_load
                         st.success(f"{len(filings_list)} Berichte für {ticker_to_load} gefunden!")
                     else:
-                        st.error(f"Keine Berichte für Ticker {ticker_to_load} gefunden oder Fehler beim Abrufen.")
+                        st.error(f"Keine Berichte für Ticker {ticker_to_load} gefunden. Bitte prüfen Sie die Schreibweise oder laden Sie ein PDF hoch.")
+                        if "available_filings" in st.session_state:
+                            del st.session_state["available_filings"]
                         
-            # Show dropdown if filings were fetched and match current ticker
+            # Show list of filings if fetched and match current ticker
             if "available_filings" in st.session_state and st.session_state.get("available_filings_ticker") == ticker_to_load:
                 filings_list = st.session_state["available_filings"]
                 
@@ -1179,13 +1183,40 @@ with tab3:
                 if not filings_list:
                     st.warning("Keine Berichte entsprechen dem gewählten Filter.")
                 else:
-                    # Select report
+                    st.markdown("### 📋 Gefundene Berichte")
+                    st.markdown("Sie können Berichte direkt anklicken, um sie im Browser zu lesen, oder unten auswählen, um sie im Analyzer einzulesen:")
+                    
+                    # Display a table with URLs that can be clicked
+                    df_filings = pd.DataFrame([
+                        {
+                            "Datum": f["date"],
+                            "Typ": f["type"],
+                            "Titel": f["title"],
+                            "Link": f["url"]
+                        }
+                        for f in filings_list
+                    ])
+                    
+                    st.dataframe(
+                        df_filings,
+                        column_config={
+                            "Link": st.column_config.LinkColumn("Bericht öffnen", display_text="Im Browser öffnen ↗")
+                        },
+                        hide_index=True,
+                        use_container_width=True
+                    )
+                    
+                    st.markdown("---")
+                    st.markdown("### 📥 Bericht im Analyzer laden")
+                    
+                    # Select report for analyzer
                     report_options = [
                         f"{f['date']} | {f['type']} | {f['title']}" for f in filings_list
                     ]
                     selected_report_str = st.selectbox(
                         "Wählen Sie den zu analysierenden Bericht:",
-                        options=report_options
+                        options=report_options,
+                        key="sec_report_select_to_analyze"
                     )
                     
                     selected_index = report_options.index(selected_report_str)
@@ -1298,4 +1329,5 @@ with tab3:
                     )
                 else:
                     st.write("Keine Treffer gefunden.")
+
 
