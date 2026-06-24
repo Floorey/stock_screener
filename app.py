@@ -33,7 +33,8 @@ from alpaca_trader import (
     cancel_all_orders,
     verify_alpaca_connection,
     get_alpaca_credentials,
-    wait_for_order_fill
+    wait_for_order_fill,
+    close_position
 )
 
 # Reconfigure encoding to avoid Windows encoding crashes
@@ -1008,7 +1009,27 @@ with tab_trade:
                         use_container_width=True,
                         hide_index=True
                     )
-                
+                    
+                    # Close position form
+                    st.markdown("#### 🚪 Position schließen")
+                    close_col1, close_col2 = st.columns([3, 1])
+                    with close_col1:
+                        position_to_close = st.selectbox(
+                            "Wählen Sie eine Position zum Schließen/Glattstellen:",
+                            options=[p["symbol"] for p in positions],
+                            format_func=lambda x: f"{x} ({next(item for item in positions if item['symbol'] == x)['qty']} Anteile, GuV: ${float(next(item for item in positions if item['symbol'] == x)['unrealized_pl']):,.2f})",
+                            key="position_to_close_select"
+                        )
+                    with close_col2:
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        if st.button("🚪 Glattstellen", use_container_width=True, key="close_position_btn"):
+                            with st.spinner(f"Schließe Position {position_to_close}..."):
+                                if close_position(position_to_close):
+                                    st.success(f"Position {position_to_close} wurde erfolgreich glattgestellt.")
+                                    st.rerun()
+                                else:
+                                    st.error(f"Fehler: Position {position_to_close} konnte nicht geschlossen werden.")
+                                    
                 st.markdown("### ⏳ Offene Orders")
                 if not open_orders:
                     st.info("Keine ausstehenden (offenen) Orders.")
@@ -1119,6 +1140,139 @@ with tab_trade:
                                 st.rerun()
                             else:
                                 st.error(f"Fehler beim Übermitteln der Order: {res.get('message')}")
+
+    # ----------------------------------------------------
+    # SINGLE SCRIPTS RUNNER SECTION
+    # ----------------------------------------------------
+    st.markdown("---")
+    st.markdown("### 📜 System-Skripte ausführen")
+    st.markdown("Führen Sie eines der Absicherungs- oder Risikomanagement-Skripte direkt auf dem Server aus und sehen Sie die Live-Konsolenausgabe.")
+    
+    script_choice = st.selectbox(
+        "Wählen Sie ein Skript:",
+        [
+            "short_nasdaq.py (NASDAQ Short Hedge)",
+            "short_sp500.py (S&P 500 Short Hedge)",
+            "short_russell.py (Russell 2000 Short Hedge)",
+            "risk_manager.py (Portfolio Risk Analyzer)",
+            "synthetic_swap_builder.py (Synthetic Swap Builder)"
+        ],
+        key="selected_single_script"
+    )
+    
+    # Dynamic controls
+    cmd_args = []
+    if "short_" in script_choice:
+        col_c1, col_c2, col_c3 = st.columns(3)
+        with col_c1:
+            run_type = st.selectbox(
+                "Absicherungs-Typ:",
+                ["put (OTM Put-Option)", "synthetic (Option A)", "short (Physischer ETF-Short)"],
+                key="run_type_select"
+            )
+            type_val = run_type.split()[0]
+            cmd_args += ["--type", type_val]
+        with col_c2:
+            run_qty = st.number_input(
+                "Menge/Kontrakte:",
+                min_value=1,
+                value=1,
+                step=1,
+                key="run_qty_input"
+            )
+            cmd_args += ["--qty", str(run_qty)]
+        with col_c3:
+            run_otm = st.slider(
+                "Abstand vom Kurs für Puts (%):",
+                min_value=2.0,
+                max_value=20.0,
+                value=5.0,
+                step=0.5,
+                key="run_otm_slider"
+            )
+            if type_val == "put":
+                cmd_args += ["--otm", f"{run_otm:.1f}"]
+                
+    elif "synthetic_swap_builder.py" in script_choice:
+        col_s1, col_s2, col_s3 = st.columns(3)
+        with col_s1:
+            sw_ticker = st.text_input(
+                "Basiswert Ticker (Aktie/ETF):",
+                value="AAPL",
+                key="sw_ticker_input"
+            ).upper().strip()
+            cmd_args += ["--ticker", sw_ticker]
+        with col_s2:
+            sw_dir = st.selectbox(
+                "Richtung (Long/Short):",
+                ["long (Synthetic Long)", "short (Synthetic Short)"],
+                key="sw_dir_select"
+            )
+            dir_val = sw_dir.split()[0]
+            cmd_args += ["--direction", dir_val]
+        with col_s3:
+            sw_qty = st.number_input(
+                "Menge/Kontrakte (je 100 Aktien):",
+                min_value=1,
+                value=1,
+                step=1,
+                key="sw_qty_input"
+            )
+            cmd_args += ["--qty", str(sw_qty)]
+            
+        col_s4, col_s5 = st.columns(2)
+        with col_s4:
+            sw_strike = st.text_input(
+                "Basispreis (Strike) [Optional, leer lassen für ATM]:",
+                value="",
+                key="sw_strike_input"
+            ).strip()
+            if sw_strike:
+                try:
+                    cmd_args += ["--strike", str(float(sw_strike))]
+                except ValueError:
+                    st.warning("Bitte geben Sie eine gültige Zahl für den Strike ein (oder leer lassen).")
+        with col_s5:
+            sw_expiry = st.text_input(
+                "Ablaufdatum (YYYY-MM-DD) [Optional, leer lassen für ca. 30 Tage DTE]:",
+                value="",
+                key="sw_expiry_input"
+            ).strip()
+            if sw_expiry:
+                cmd_args += ["--expiry", sw_expiry]
+                
+    if st.button("🚀 Skript jetzt ausführen", key="execute_single_script_btn"):
+        script_filename = script_choice.split()[0]
+        script_path = os.path.join(os.path.dirname(__file__), script_filename)
+        
+        if not os.path.exists(script_path):
+            st.error(f"Skript-Datei `{script_filename}` wurde unter `{script_path}` nicht gefunden.")
+        else:
+            with st.spinner(f"Führe `python {script_filename} {' '.join(cmd_args)}` aus..."):
+                import subprocess
+                try:
+                    # Construct subprocess call
+                    cmd = [sys.executable, script_path] + cmd_args
+                    result = subprocess.run(cmd, capture_output=True, text=True, cwd=os.path.dirname(__file__), timeout=30)
+                    
+                    st.markdown("**Konsolenausgabe (Stdout):**")
+                    if result.stdout:
+                        st.code(result.stdout, language="text")
+                    else:
+                        st.info("Keine Standardausgabe.")
+                        
+                    if result.stderr:
+                        st.markdown("**Fehlerausgabe (Stderr):**")
+                        st.code(result.stderr, language="text")
+                        
+                    if result.returncode == 0:
+                        st.success(f"Skript `{script_filename}` wurde erfolgreich beendet (Exit Code 0).")
+                    else:
+                        st.error(f"Skript `{script_filename}` wurde mit Fehlercode {result.returncode} beendet.")
+                except subprocess.TimeoutExpired:
+                    st.error("Zeitüberschreitung: Das Skript hat länger als 30 Sekunden für die Ausführung benötigt.")
+                except Exception as e:
+                    st.error(f"Fehler beim Ausführen des Skripts: {e}")
 
 
 # ----------------------------------------------------
@@ -1589,138 +1743,7 @@ with tab_strat:
                                         else:
                                             st.error(f"🔴 **{title}**: Fehler: {res.get('message')}")
 
-    # ----------------------------------------------------
-    # SINGLE SCRIPTS RUNNER SECTION
-    # ----------------------------------------------------
-    st.markdown("---")
-    st.markdown("### 📜 System-Skripte ausführen")
-    st.markdown("Führen Sie eines der Absicherungs- oder Risikomanagement-Skripte direkt auf dem Server aus und sehen Sie die Live-Konsolenausgabe.")
-    
-    script_choice = st.selectbox(
-        "Wählen Sie ein Skript:",
-        [
-            "short_nasdaq.py (NASDAQ Short Hedge)",
-            "short_sp500.py (S&P 500 Short Hedge)",
-            "short_russell.py (Russell 2000 Short Hedge)",
-            "risk_manager.py (Portfolio Risk Analyzer)",
-            "synthetic_swap_builder.py (Synthetic Swap Builder)"
-        ],
-        key="selected_single_script"
-    )
-    
-    # Dynamic controls
-    cmd_args = []
-    if "short_" in script_choice:
-        col_c1, col_c2, col_c3 = st.columns(3)
-        with col_c1:
-            run_type = st.selectbox(
-                "Absicherungs-Typ:",
-                ["put (OTM Put-Option)", "synthetic (Option A)", "short (Physischer ETF-Short)"],
-                key="run_type_select"
-            )
-            type_val = run_type.split()[0]
-            cmd_args += ["--type", type_val]
-        with col_c2:
-            run_qty = st.number_input(
-                "Menge/Kontrakte:",
-                min_value=1,
-                value=1,
-                step=1,
-                key="run_qty_input"
-            )
-            cmd_args += ["--qty", str(run_qty)]
-        with col_c3:
-            run_otm = st.slider(
-                "Abstand vom Kurs für Puts (%):",
-                min_value=2.0,
-                max_value=20.0,
-                value=5.0,
-                step=0.5,
-                key="run_otm_slider"
-            )
-            if type_val == "put":
-                cmd_args += ["--otm", f"{run_otm:.1f}"]
-                
-    elif "synthetic_swap_builder.py" in script_choice:
-        col_s1, col_s2, col_s3 = st.columns(3)
-        with col_s1:
-            sw_ticker = st.text_input(
-                "Basiswert Ticker (Aktie/ETF):",
-                value="AAPL",
-                key="sw_ticker_input"
-            ).upper().strip()
-            cmd_args += ["--ticker", sw_ticker]
-        with col_s2:
-            sw_dir = st.selectbox(
-                "Richtung (Long/Short):",
-                ["long (Synthetic Long)", "short (Synthetic Short)"],
-                key="sw_dir_select"
-            )
-            dir_val = sw_dir.split()[0]
-            cmd_args += ["--direction", dir_val]
-        with col_s3:
-            sw_qty = st.number_input(
-                "Menge/Kontrakte (je 100 Aktien):",
-                min_value=1,
-                value=1,
-                step=1,
-                key="sw_qty_input"
-            )
-            cmd_args += ["--qty", str(sw_qty)]
-            
-        col_s4, col_s5 = st.columns(2)
-        with col_s4:
-            sw_strike = st.text_input(
-                "Basispreis (Strike) [Optional, leer lassen für ATM]:",
-                value="",
-                key="sw_strike_input"
-            ).strip()
-            if sw_strike:
-                try:
-                    cmd_args += ["--strike", str(float(sw_strike))]
-                except ValueError:
-                    st.warning("Bitte geben Sie eine gültige Zahl für den Strike ein (oder leer lassen).")
-        with col_s5:
-            sw_expiry = st.text_input(
-                "Ablaufdatum (YYYY-MM-DD) [Optional, leer lassen für ca. 30 Tage DTE]:",
-                value="",
-                key="sw_expiry_input"
-            ).strip()
-            if sw_expiry:
-                cmd_args += ["--expiry", sw_expiry]
-                
-    if st.button("🚀 Skript jetzt ausführen", key="execute_single_script_btn"):
-        script_filename = script_choice.split()[0]
-        script_path = os.path.join(os.path.dirname(__file__), script_filename)
-        
-        if not os.path.exists(script_path):
-            st.error(f"Skript-Datei `{script_filename}` wurde unter `{script_path}` nicht gefunden.")
-        else:
-            with st.spinner(f"Führe `python {script_filename} {' '.join(cmd_args)}` aus..."):
-                import subprocess
-                try:
-                    # Construct subprocess call
-                    cmd = [sys.executable, script_path] + cmd_args
-                    result = subprocess.run(cmd, capture_output=True, text=True, cwd=os.path.dirname(__file__), timeout=30)
-                    
-                    st.markdown("**Konsolenausgabe (Stdout):**")
-                    if result.stdout:
-                        st.code(result.stdout, language="text")
-                    else:
-                        st.info("Keine Standardausgabe.")
-                        
-                    if result.stderr:
-                        st.markdown("**Fehlerausgabe (Stderr):**")
-                        st.code(result.stderr, language="text")
-                        
-                    if result.returncode == 0:
-                        st.success(f"Skript `{script_filename}` wurde erfolgreich beendet (Exit Code 0).")
-                    else:
-                        st.error(f"Skript `{script_filename}` wurde mit Fehlercode {result.returncode} beendet.")
-                except subprocess.TimeoutExpired:
-                    st.error("Zeitüberschreitung: Das Skript hat länger als 30 Sekunden für die Ausführung benötigt.")
-                except Exception as e:
-                    st.error(f"Fehler beim Ausführen des Skripts: {e}")
+
 
 
 

@@ -241,3 +241,17 @@ def wait_for_order_fill(order_id: str, timeout: int = 15) -> bool:
             
     print(f"[Alpaca] Order {order_id} did not fill within {timeout} seconds.")
     return False
+
+def close_position(symbol: str) -> bool:
+    """Closes/liquidates an open position by symbol using the DELETE endpoint."""
+    if not is_alpaca_configured():
+        return False
+        
+    _, _, base_url = get_alpaca_credentials()
+    url = f"{base_url}/v2/positions/{symbol.upper()}"
+    try:
+        response = requests.delete(url, headers=get_alpaca_headers(), timeout=10)
+        return response.status_code in [200, 201, 204]
+    except Exception as e:
+        print(f"[Alpaca Trader] Connection error during position liquidation: {e}")
+    return False
