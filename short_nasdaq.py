@@ -10,7 +10,7 @@ def main():
         help="Hedging Type: 'put' (Protective OTM Put Option, recommended), 'short' (Physical ETF Short Sale), 'synthetic' (Synthetic Short Options)"
     )
     parser.add_argument("--qty", type=int, default=1, help="Quantity: Shares for 'short', Contracts for 'put'/'synthetic' (1 Contract = 100 shares)")
-    parser.add_argument("--otm", type=float, default=5.0, help="Out-Of-The-Money distance in % for protective put (default: 5.0%)")
+    parser.add_argument("--otm", type=float, default=5.0, help="Out-Of-The-Money distance in percent for protective put (default: 5.0)")
     args = parser.parse_args()
 
     hedger = MarketHedger("QQQ")
