@@ -656,64 +656,224 @@ with tab2:
                                     '<h3 style="margin-top: 0; color: #3b82f6;">🦙 Alpaca Schnell-Handel</h3>'
                                     'Handeln Sie diesen Wert direkt über Ihr Alpaca-Konto.</div>', unsafe_allow_html=True)
                         
-                        trade_col1, trade_col2, trade_col3 = st.columns([1, 1, 2])
-                        with trade_col1:
-                            trade_qty = st.number_input(
-                                "Stückzahl", 
-                                min_value=0.01, 
-                                value=1.0, 
-                                step=1.0, 
-                                key=f"trade_qty_{target_symbol}"
-                            )
-                        with trade_col2:
-                            trade_type = st.selectbox(
-                                "Order-Typ", 
-                                ["Market", "Limit"], 
-                                key=f"trade_type_{target_symbol}"
-                            )
-                            trade_limit_price = None
-                            if trade_type == "Limit":
-                                current_p = info.get('currentPrice') or info.get('previousClose', 0.0)
-                                trade_limit_price = st.number_input(
-                                    "Limit-Preis ($)", 
+                        trade_tab_stock, trade_tab_options = st.tabs(["Stock/ETF handeln", "Optionen handeln"])
+                        
+                        with trade_tab_stock:
+                            trade_col1, trade_col2, trade_col3 = st.columns([1, 1, 2])
+                            with trade_col1:
+                                trade_qty = st.number_input(
+                                    "Stückzahl", 
                                     min_value=0.01, 
-                                    value=float(current_p) if current_p else 10.0, 
-                                    step=0.01, 
-                                    key=f"trade_limit_{target_symbol}"
+                                    value=1.0, 
+                                    step=1.0, 
+                                    key=f"trade_qty_{target_symbol}"
                                 )
-                        with trade_col3:
-                            st.markdown("<br>", unsafe_allow_html=True)
-                            buy_btn, sell_btn = st.columns(2)
-                            with buy_btn:
-                                if st.button("🟢 Kaufen (Buy)", key=f"buy_btn_action_{target_symbol}", use_container_width=True):
-                                    with st.spinner("Übermittle Kauforder..."):
-                                        res = place_order(
-                                            symbol=target_symbol,
-                                            qty=trade_qty,
-                                            side="buy",
-                                            order_type=trade_type.lower(),
-                                            limit_price=trade_limit_price
+                            with trade_col2:
+                                trade_type = st.selectbox(
+                                    "Order-Typ", 
+                                    ["Market", "Limit"], 
+                                    key=f"trade_type_{target_symbol}"
+                                )
+                                trade_limit_price = None
+                                if trade_type == "Limit":
+                                    current_p = info.get('currentPrice') or info.get('previousClose', 0.0)
+                                    trade_limit_price = st.number_input(
+                                        "Limit-Preis ($)", 
+                                        min_value=0.01, 
+                                        value=float(current_p) if current_p else 10.0, 
+                                        step=0.01, 
+                                        key=f"trade_limit_{target_symbol}"
+                                    )
+                            with trade_col3:
+                                st.markdown("<br>", unsafe_allow_html=True)
+                                buy_btn, sell_btn = st.columns(2)
+                                with buy_btn:
+                                    if st.button("🟢 Kaufen (Buy)", key=f"buy_btn_action_{target_symbol}", use_container_width=True):
+                                        with st.spinner("Übermittle Kauforder..."):
+                                            res = place_order(
+                                                symbol=target_symbol,
+                                                qty=trade_qty,
+                                                side="buy",
+                                                order_type=trade_type.lower(),
+                                                limit_price=trade_limit_price
+                                            )
+                                            if res.get("status") == "success":
+                                                ord_info = res.get("order", {})
+                                                st.success(f"Kauforder erfolgreich platziert: {trade_qty} {target_symbol} ({ord_info.get('status')})")
+                                            else:
+                                                st.error(f"Fehler: {res.get('message')}")
+                                with sell_btn:
+                                    if st.button("🔴 Verkaufen (Sell)", key=f"sell_btn_action_{target_symbol}", use_container_width=True):
+                                        with st.spinner("Übermittle Verkaufsorder..."):
+                                            res = place_order(
+                                                symbol=target_symbol,
+                                                qty=trade_qty,
+                                                side="sell",
+                                                order_type=trade_type.lower(),
+                                                limit_price=trade_limit_price
+                                            )
+                                            if res.get("status") == "success":
+                                                ord_info = res.get("order", {})
+                                                st.success(f"Verkaufsorder erfolgreich platziert: {trade_qty} {target_symbol} ({ord_info.get('status')})")
+                                            else:
+                                                st.error(f"Fehler: {res.get('message')}")
+                                                
+                        with trade_tab_options:
+                            opt_chain_list = list(ticker.options) if hasattr(ticker, "options") else []
+                            if not opt_chain_list:
+                                st.warning(f"Für {target_symbol} sind keine Option-Contracts verfügbar.")
+                            else:
+                                opt_col1, opt_col2, opt_col3 = st.columns(3)
+                                with opt_col1:
+                                    sel_expiry = st.selectbox(
+                                        "Ablaufdatum (Expiry Date):",
+                                        options=opt_chain_list,
+                                        key=f"opt_trade_expiry_{target_symbol}"
+                                    )
+                                
+                                try:
+                                    chain_data = ticker.option_chain(sel_expiry)
+                                    calls_df = chain_data.calls
+                                    puts_df = chain_data.puts
+                                    
+                                    # Unique strikes
+                                    all_strikes = sorted(list(set(calls_df["strike"].tolist() + puts_df["strike"].tolist())))
+                                    
+                                    # Find closest to current stock price
+                                    current_stock_p = info.get('currentPrice') or info.get('previousClose', 100.0)
+                                    atm_idx = min(range(len(all_strikes)), key=lambda idx: abs(all_strikes[idx] - current_stock_p))
+                                    
+                                    with opt_col2:
+                                        sel_strike = st.selectbox(
+                                            "Basispreis (Strike):",
+                                            options=all_strikes,
+                                            index=atm_idx,
+                                            key=f"opt_trade_strike_{target_symbol}"
                                         )
-                                        if res.get("status") == "success":
-                                            ord_info = res.get("order", {})
-                                            st.success(f"Kauforder erfolgreich platziert: {trade_qty} {target_symbol} ({ord_info.get('status')})")
-                                        else:
-                                            st.error(f"Fehler: {res.get('message')}")
-                            with sell_btn:
-                                if st.button("🔴 Verkaufen (Sell)", key=f"sell_btn_action_{target_symbol}", use_container_width=True):
-                                    with st.spinner("Übermittle Verkaufsorder..."):
-                                        res = place_order(
-                                            symbol=target_symbol,
-                                            qty=trade_qty,
-                                            side="sell",
-                                            order_type=trade_type.lower(),
-                                            limit_price=trade_limit_price
+                                    with opt_col3:
+                                        opt_type = st.radio(
+                                            "Optionstyp:",
+                                            ["Call", "Put"],
+                                            horizontal=True,
+                                            key=f"opt_trade_type_{target_symbol}"
                                         )
-                                        if res.get("status") == "success":
-                                            ord_info = res.get("order", {})
-                                            st.success(f"Verkaufsorder erfolgreich platziert: {trade_qty} {target_symbol} ({ord_info.get('status')})")
-                                        else:
-                                            st.error(f"Fehler: {res.get('message')}")
+                                        
+                                    # Get specific contract symbol and details
+                                    target_df = calls_df if opt_type == "Call" else puts_df
+                                    match_row = target_df[target_df["strike"] == sel_strike]
+                                    
+                                    if match_row.empty:
+                                        st.error(f"Kein Kontrakt für {opt_type} bei Strike ${sel_strike:.2f} gefunden.")
+                                    else:
+                                        con = match_row.iloc[0].to_dict()
+                                        c_symbol = con.get("contractSymbol", "")
+                                        c_bid = con.get("bid", 0.0)
+                                        c_ask = con.get("ask", 0.0)
+                                        c_last = con.get("lastPrice", 0.0)
+                                        c_mid = (c_bid + c_ask) / 2.0 or c_last
+                                        c_iv = con.get("impliedVolatility", 0.0)
+                                        
+                                        # Render contract details card
+                                        st.markdown(f"""
+                                        <div style="background-color: #111827; border-radius: 8px; padding: 0.8rem; border: 1px solid #1f2937; margin-bottom: 1rem;">
+                                            <strong>Option:</strong> <code style="color: #3b82f6;">{c_symbol}</code><br>
+                                            <strong>Bid (Geld):</strong> ${c_bid:.2f} | 
+                                            <strong>Ask (Brief):</strong> ${c_ask:.2f} | 
+                                            <strong>Mitte:</strong> ${c_mid:.2f} | 
+                                            <strong>Zuletzt:</strong> ${c_last:.2f}<br>
+                                            <strong>Implizierte Volatilität (IV):</strong> {c_iv*100:.1f}% | 
+                                            <strong>Volumen:</strong> {con.get('volume', 0)} | 
+                                            <strong>Open Interest:</strong> {con.get('openInterest', 0)}
+                                        </div>
+                                        """, unsafe_allow_html=True)
+                                        
+                                        # Trading details
+                                        opt_trade_col1, opt_trade_col2, opt_trade_col3 = st.columns([1, 1, 2])
+                                        with opt_trade_col1:
+                                            opt_qty = st.number_input(
+                                                "Menge (Kontrakte)",
+                                                min_value=1,
+                                                value=1,
+                                                step=1,
+                                                key=f"opt_trade_qty_{target_symbol}"
+                                            )
+                                        with opt_trade_col2:
+                                            opt_order_t = st.selectbox(
+                                                "Order-Typ",
+                                                ["Limit", "Market"],
+                                                key=f"opt_order_type_sel_{target_symbol}"
+                                            )
+                                            opt_limit_p = None
+                                            if opt_order_t == "Limit":
+                                                opt_limit_p = st.number_input(
+                                                    "Limit-Preis ($)",
+                                                    min_value=0.01,
+                                                    value=float(c_mid) if c_mid > 0 else 0.10,
+                                                    step=0.01,
+                                                    key=f"opt_limit_price_input_{target_symbol}"
+                                                )
+                                        with opt_trade_col3:
+                                            st.markdown("<br>", unsafe_allow_html=True)
+                                            opt_buy_btn, opt_sell_btn = st.columns(2)
+                                            
+                                            # Retrieve available Options Buying Power
+                                            account_data = get_account_info()
+                                            available_opt_bp = 0.0
+                                            if account_data:
+                                                available_opt_bp = float(account_data.get("options_buying_power") or account_data.get("buying_power") or account_data.get("cash", 0.0))
+                                                
+                                            with opt_buy_btn:
+                                                if st.button("🟢 Kaufen (Buy)", key=f"opt_buy_btn_action_{target_symbol}", use_container_width=True):
+                                                    final_price = opt_limit_p
+                                                    if opt_order_t == "Limit" and (final_price is None or final_price <= 0):
+                                                        final_price = c_ask if c_ask > 0 else (c_mid if c_mid > 0 else 0.01)
+                                                        
+                                                    with st.spinner("Sende Kauforder..."):
+                                                        res = place_order(
+                                                            symbol=c_symbol,
+                                                            qty=opt_qty,
+                                                            side="buy",
+                                                            order_type=opt_order_t.lower(),
+                                                            limit_price=final_price
+                                                        )
+                                                        if res.get("status") == "success":
+                                                            ord_info = res.get("order", {})
+                                                            st.success(f"Options-Kauforder platziert: {opt_qty}x {c_symbol} ({ord_info.get('status')})")
+                                                        else:
+                                                            st.error(f"Fehler: {res.get('message')}")
+                                                            
+                                            with opt_sell_btn:
+                                                is_sell_disabled = False
+                                                required_bp = 0.0
+                                                if opt_type == "Put":
+                                                    required_bp = sel_strike * 100.0 * opt_qty
+                                                    if required_bp > available_opt_bp:
+                                                        is_sell_disabled = True
+                                                        
+                                                if is_sell_disabled:
+                                                    st.error(f"❌ Keine Kaufkraft! Benötigt: ${required_bp:,.2f} | Verfügbar: ${available_opt_bp:,.2f}")
+                                                    
+                                                if st.button("🔴 Schreiben (Sell)", key=f"opt_sell_btn_action_{target_symbol}", use_container_width=True, disabled=is_sell_disabled):
+                                                    final_price = opt_limit_p
+                                                    if opt_order_t == "Limit" and (final_price is None or final_price <= 0):
+                                                        final_price = c_bid if c_bid > 0 else (c_mid if c_mid > 0 else 0.01)
+                                                        
+                                                    with st.spinner("Sende Verkaufsorder..."):
+                                                        res = place_order(
+                                                            symbol=c_symbol,
+                                                            qty=opt_qty,
+                                                            side="sell",
+                                                            order_type=opt_order_t.lower(),
+                                                            limit_price=final_price
+                                                        )
+                                                        if res.get("status") == "success":
+                                                            ord_info = res.get("order", {})
+                                                            st.success(f"Options-Schreiborder platziert: {opt_qty}x {c_symbol} ({ord_info.get('status')})")
+                                                        else:
+                                                            st.error(f"Fehler: {res.get('message')}")
+                                                            
+                                except Exception as e:
+                                    st.error(f"Fehler beim Laden der Optionskette: {e}")
                         st.markdown("---")
                         
                     # WSB Sentiment Section
