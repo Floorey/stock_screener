@@ -24,7 +24,9 @@ from alpaca_trader import (
     get_open_orders,
     place_order,
     cancel_order,
-    cancel_all_orders
+    cancel_all_orders,
+    verify_alpaca_connection,
+    get_alpaca_credentials
 )
 
 # Reconfigure encoding to avoid Windows encoding crashes
@@ -164,11 +166,11 @@ with st.sidebar.expander("🦙 Alpaca Integration (Optional)", expanded=False):
 
     # Visual connection status check
     if os.getenv("ALPACA_API_KEY") or os.getenv("ALPACA_SECRET_KEY"):
-        acc_info = get_account_info()
-        if acc_info and "status" in acc_info:
-            st.success(f"🟢 Alpaca ({acc_info.get('status')}) verbunden!")
+        is_ok, status_msg = verify_alpaca_connection()
+        if is_ok:
+            st.success(f"🟢 Alpaca {status_msg}")
         else:
-            st.error("🔴 Fehler: Verbindung schlug fehl. Bitte prüfen Sie Ihre API Keys und die Base URL (Live vs. Paper).")
+            st.error(f"🔴 {status_msg}")
 
 # Trigger scan button
 start_scan = st.sidebar.button("🔍 Screener starten")

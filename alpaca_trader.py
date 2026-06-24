@@ -56,6 +56,39 @@ def get_account_info() -> Dict[str, Any]:
         print(f"[Alpaca Trader] Connection error during account fetch: {e}")
     return {}
 
+def verify_alpaca_connection() -> tuple[bool, str]:
+    """
+    Verifies the connection to Alpaca and returns a status flag and details.
+    Returns (True, message) if connection is successful, (False, details) otherwise.
+    """
+    if not is_alpaca_configured():
+        return False, "Alpaca API Keys sind nicht vollständig konfiguriert (Key ID und Secret Key werden benötigt)."
+        
+    api_key, secret_key, base_url = get_alpaca_credentials()
+    url = f"{base_url}/v2/account"
+    try:
+        response = requests.get(url, headers=get_alpaca_headers(), timeout=10)
+        if response.status_code == 200:
+            acc_data = response.json()
+            return True, f"Verbunden! Konto-Status: {acc_data.get('status', 'ACTIVE')}"
+        elif response.status_code == 401:
+            return False, "Fehler 401: Ungültige API-Schlüssel. Bitte prüfen Sie Key ID und Secret Key."
+        elif response.status_code == 403:
+            return False, "Fehler 403: Zugriff verweigert. Haben Sie Live-Keys mit der Paper-URL verwendet oder umgekehrt?"
+        else:
+            try:
+                err_msg = response.json().get("message", response.text)
+            except Exception:
+                err_msg = response.text
+            return False, f"Fehler {response.status_code}: {err_msg}"
+    except requests.exceptions.Timeout:
+        return False, "Verbindungsfehler: Zeitüberschreitung (Timeout) beim Verbinden mit Alpaca."
+    except requests.exceptions.ConnectionError:
+        return False, "Verbindungsfehler: Verbindung zum Alpaca-Server fehlgeschlagen. Bitte URL und Internet prüfen."
+    except Exception as e:
+        return False, f"Unbekannter Fehler: {str(e)}"
+
+
 def get_positions() -> List[Dict[str, Any]]:
     """
     Fetches currently open portfolio positions from Alpaca.
