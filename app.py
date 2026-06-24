@@ -16,6 +16,12 @@ from watchlist_manager import load_watchlist, add_to_watchlist, remove_from_watc
 from macro_fetcher import fetch_macro_futures, search_polymarket_markets, fetch_company_news, fetch_wsb_trending
 from report_generator import generate_pdf_report
 from options_ui import render_options_tab
+from risk_manager import (
+    fetch_portfolio_positions,
+    calculate_portfolio_var,
+    run_stress_test,
+    run_risk_manager_run
+)
 from datetime import datetime
 from alpaca_trader import (
     is_alpaca_configured,
@@ -193,13 +199,14 @@ if "macro_futures_df" in st.session_state and not st.session_state["macro_future
     )
 
 # Initialize Tabs
-tab1, tab_wl, tab_opt, tab2, tab_trade, tab_strat, tab3 = st.tabs([
+tab1, tab_wl, tab_opt, tab2, tab_trade, tab_strat, tab_risk, tab3 = st.tabs([
     "🎯 Screener Dashboard", 
     "⭐ Watchlist Manager", 
     "🎫 Options-Screener",
     "📈 Einzelwert-Analyse", 
     "💼 Alpaca Trading",
     "⚡ Strategie-Desk (Option A)",
+    "🛡️ Risk-Manager & Stress-Test",
     "📄 PDF Finanzbericht Analyzer"
 ])
 
@@ -1495,11 +1502,230 @@ with tab_strat:
                                     else:
                                         st.warning(f"Einige Orders konnten nicht platziert werden ({success_count}/{len(legs_data)} erfolgreich). Details unten.")
                                         
+
                                     for title, res in responses:
                                         if res.get("status") == "success":
                                             st.success(f"🟢 **{title}**: Platziert! ID: {res['order']['id']} (Status: {res['order']['status']})")
                                         else:
                                             st.error(f"🔴 **{title}**: Fehler: {res.get('message')}")
+
+    # ----------------------------------------------------
+    # SINGLE SCRIPTS RUNNER SECTION
+    # ----------------------------------------------------
+    st.markdown("---")
+    st.markdown("### 📜 System-Skripte ausführen")
+    st.markdown("Führen Sie eines der Absicherungs- oder Risikomanagement-Skripte direkt auf dem Server aus und sehen Sie die Live-Konsolenausgabe.")
+    
+    script_choice = st.selectbox(
+        "Wählen Sie ein Skript:",
+        [
+            "short_nasdaq.py (NASDAQ Short Hedge)",
+            "short_sp500.py (S&P 500 Short Hedge)",
+            "short_russell.py (Russell 2000 Short Hedge)",
+            "risk_manager.py (Portfolio Risk Analyzer)"
+        ],
+        key="selected_single_script"
+    )
+    
+    # Dynamic controls
+    cmd_args = []
+    if "short_" in script_choice:
+        col_c1, col_c2, col_c3 = st.columns(3)
+        with col_c1:
+            run_type = st.selectbox(
+                "Absicherungs-Typ:",
+                ["put (OTM Put-Option)", "synthetic (Option A)", "short (Physischer ETF-Short)"],
+                key="run_type_select"
+            )
+            type_val = run_type.split()[0]
+            cmd_args += ["--type", type_val]
+        with col_c2:
+            run_qty = st.number_input(
+                "Menge/Kontrakte:",
+                min_value=1,
+                value=1,
+                step=1,
+                key="run_qty_input"
+            )
+            cmd_args += ["--qty", str(run_qty)]
+        with col_c3:
+            run_otm = st.slider(
+                "Abstand vom Kurs für Puts (%):",
+                min_value=2.0,
+                max_value=20.0,
+                value=5.0,
+                step=0.5,
+                key="run_otm_slider"
+            )
+            if type_val == "put":
+                cmd_args += ["--otm", f"{run_otm:.1f}"]
+                
+    if st.button("🚀 Skript jetzt ausführen", key="execute_single_script_btn"):
+        script_filename = script_choice.split()[0]
+        script_path = os.path.join(os.path.dirname(__file__), script_filename)
+        
+        if not os.path.exists(script_path):
+            st.error(f"Skript-Datei `{script_filename}` wurde unter `{script_path}` nicht gefunden.")
+        else:
+            with st.spinner(f"Führe `python {script_filename} {' '.join(cmd_args)}` aus..."):
+                import subprocess
+                try:
+                    # Construct subprocess call
+                    cmd = [sys.executable, script_path] + cmd_args
+                    result = subprocess.run(cmd, capture_output=True, text=True, cwd=os.path.dirname(__file__), timeout=30)
+                    
+                    st.markdown("**Konsolenausgabe (Stdout):**")
+                    if result.stdout:
+                        st.code(result.stdout, language="text")
+                    else:
+                        st.info("Keine Standardausgabe.")
+                        
+                    if result.stderr:
+                        st.markdown("**Fehlerausgabe (Stderr):**")
+                        st.code(result.stderr, language="text")
+                        
+                    if result.returncode == 0:
+                        st.success(f"Skript `{script_filename}` wurde erfolgreich beendet (Exit Code 0).")
+                    else:
+                        st.error(f"Skript `{script_filename}` wurde mit Fehlercode {result.returncode} beendet.")
+                except subprocess.TimeoutExpired:
+                    st.error("Zeitüberschreitung: Das Skript hat länger als 30 Sekunden für die Ausführung benötigt.")
+                except Exception as e:
+                    st.error(f"Fehler beim Ausführen des Skripts: {e}")
+
+
+
+# ----------------------------------------------------
+# TAB RISK: RISK MANAGER & STRESS TEST
+# ----------------------------------------------------
+with tab_risk:
+    st.markdown('<div class="wl-banner"><h2>🛡️ Blackgate Capital Risk-Manager & Stress-Test</h2></div>', unsafe_allow_html=True)
+    st.markdown("Analysieren Sie das Risiko Ihres Gesamtportfolios auf Basis von *Value at Risk (VaR)* und simulieren Sie makroökonomische Krisenszenarien.")
+    
+    # Check daemon status/info
+    st.info("💡 **Hintergrund-Bot:** Sie können den Risk-Manager als Daemon-Bot im Hintergrund starten, der Ihr Portfolio alle 10 Minuten überwacht und Berichte speichert. Führen Sie dazu im Terminal aus: `python risk_manager.py --daemon`")
+    
+    # Load positions and calculate risk metrics
+    with st.spinner("Berechne Portfolio-Risikokennzahlen..."):
+        try:
+            positions = fetch_portfolio_positions()
+            acc_info = get_account_info()
+            if not acc_info:
+                acc_info = {"equity": 100000.0, "cash": 100000.0, "buying_power": 400000.0}
+                
+            equity_val = float(acc_info.get("equity", 100000.0))
+            
+            # Calculate VaR
+            var_95 = calculate_portfolio_var(positions, 0.95)
+            var_99 = calculate_portfolio_var(positions, 0.99)
+            
+            # Run Stress Tests
+            stress_res = run_stress_test(positions)
+        except Exception as e:
+            st.error(f"Fehler bei der Risikoberechnung: {e}")
+            positions = []
+            equity_val = 100000.0
+            var_95 = (0.0, 0.0)
+            var_99 = (0.0, 0.0)
+            stress_res = []
+            
+    if positions:
+        # 1. KPI Metrics
+        col_r1, col_r2, col_r3 = st.columns(3)
+        with col_r1:
+            st.markdown(f"""
+            <div class="metric-card">
+                <span style="font-size: 0.9rem; color: #9ca3af;">Portfolio Equity</span>
+                <h2 style="margin: 0.5rem 0; color: #3b82f6;">${equity_val:,.2f}</h2>
+                <span style="font-size: 0.8rem; color: #9ca3af;">Aktive Positionen: {len(positions)}</span>
+            </div>
+            """, unsafe_allow_html=True)
+        with col_r2:
+            st.markdown(f"""
+            <div class="metric-card">
+                <span style="font-size: 0.9rem; color: #9ca3af;">Value at Risk (95% VaR)</span>
+                <h2 style="margin: 0.5rem 0; color: #10b981;">-${var_95[0]:,.2f}</h2>
+                <span style="font-size: 0.8rem; color: #10b981;">{var_95[1]*100:.2f}% des Portfolios</span>
+            </div>
+            """, unsafe_allow_html=True)
+        with col_r3:
+            st.markdown(f"""
+            <div class="metric-card">
+                <span style="font-size: 0.9rem; color: #9ca3af;">Extreme Value at Risk (99% VaR)</span>
+                <h2 style="margin: 0.5rem 0; color: #ef4444;">-${var_99[0]:,.2f}</h2>
+                <span style="font-size: 0.8rem; color: #ef4444;">{var_99[1]*100:.2f}% des Portfolios</span>
+            </div>
+            """, unsafe_allow_html=True)
+            
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        # 2. Portfolio Positions table
+        st.markdown("### 📋 Zu bewertende Portfolio-Positionen")
+        pos_list = []
+        for p in positions:
+            pos_list.append({
+                "Symbol/Kontrakt": p["symbol"],
+                "Menge": p["qty"],
+                "Marktwert": f"${p['market_value']:,.2f}",
+                "Delta": f"{p['delta']:.2f}" if p['is_option'] else "1.00",
+                "Beta (vs SPY)": f"{p['beta']:.2f}",
+                "Typ": "Option" if p['is_option'] else "Aktie / ETF"
+            })
+        st.dataframe(pd.DataFrame(pos_list), use_container_width=True, hide_index=True)
+        
+        # 3. Stress Tests Results
+        st.markdown("### 🌋 Makroökonomische Stresstest-Szenarien")
+        st.markdown("Die Shocks werden auf die unterliegenden Werte angewendet. Optionen werden mithilfe ihres Deltas näherungsweise re-evaluiert.")
+        
+        stress_display_list = []
+        for r in stress_res:
+            stress_display_list.append({
+                "Stresstest Szenario": r["name"],
+                "Beschreibung": r["description"],
+                "Portfolio-Wert nach Shock": f"${r['stressed_portfolio_value']:,.2f}",
+                "Geschätzter Verlust ($)": r["impact_usd"],
+                "Auswirkung (%)": f"{r['impact_pct']:.2f}%"
+            })
+            
+        df_stress = pd.DataFrame(stress_display_list)
+        
+        def highlight_impact(val):
+            if isinstance(val, (int, float)):
+                color = '#ef4444' if val < 0 else '#10b981'
+                return f'color: {color}; font-weight: bold;'
+            return ''
+            
+        st.dataframe(
+            df_stress.style.map(highlight_impact, subset=['Geschätzter Verlust ($)']),
+            use_container_width=True,
+            hide_index=True
+        )
+        
+        # 4. Generate Report PDF
+        st.markdown("---")
+        st.markdown("### 📄 PDF Risiko-Bericht erstellen")
+        st.markdown("Erstellen Sie ein druckfertiges Risk Management Memorandum für Ihr Portfolio.")
+        
+        if st.button("📄 PDF-Risikobericht generieren", key="risk_generate_pdf_btn"):
+            with st.spinner("Generiere PDF-Bericht (Führe Risikosimulation aus)..."):
+                try:
+                    pdf_path = run_risk_manager_run()
+                    # Read bytes
+                    with open(pdf_path, "rb") as f:
+                        pdf_bytes = f.read()
+                    st.session_state["risk_pdf_bytes"] = pdf_bytes
+                    st.success("PDF-Risikobericht erfolgreich generiert! Klicken Sie unten auf Herunterladen.")
+                except Exception as e:
+                    st.error(f"Fehler bei der PDF-Generierung: {e}")
+                    
+        if "risk_pdf_bytes" in st.session_state:
+            st.download_button(
+                label="📥 PDF Risiko-Bericht herunterladen",
+                data=st.session_state["risk_pdf_bytes"],
+                file_name=f"Blackgate_Risk_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                mime="application/pdf",
+                key="risk_download_pdf_btn"
+            )
 
 # ----------------------------------------------------
 # TAB 3: PDF FINANCIAL REPORT ANALYZER
