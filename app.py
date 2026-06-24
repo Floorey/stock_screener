@@ -32,7 +32,8 @@ from alpaca_trader import (
     cancel_order,
     cancel_all_orders,
     verify_alpaca_connection,
-    get_alpaca_credentials
+    get_alpaca_credentials,
+    wait_for_order_fill
 )
 
 # Reconfigure encoding to avoid Windows encoding crashes
@@ -1550,7 +1551,7 @@ with tab_strat:
                                 with st.spinner("Sende Orders an Alpaca..."):
                                     responses = []
                                     success_count = 0
-                                    for leg in legs_data:
+                                    for idx, leg in enumerate(legs_data):
                                         act = leg["Alpaca_Action"]
                                         res = place_order(
                                             symbol=act["symbol"],
@@ -1562,6 +1563,18 @@ with tab_strat:
                                         responses.append((leg["Aktion"], res))
                                         if res.get("status") == "success":
                                             success_count += 1
+                                            
+                                            # Covered Call race condition protection:
+                                            # If this is a Covered Call and Leg 1 (KAUF Stock) succeeds,
+                                            # wait for the stock buy order to be filled before placing Leg 2 (Short Call).
+                                            if "Covered Call" in strategy_choice and idx == 0:
+                                                order_id = res.get("order", {}).get("id")
+                                                if order_id:
+                                                    with st.spinner("Warte darauf, dass der Aktienkauf bei Alpaca ausgeführt (filled) wird..."):
+                                                        filled = wait_for_order_fill(order_id)
+                                                        if not filled:
+                                                            st.warning("⚠️ Der Aktienkauf wurde nicht rechtzeitig ausgeführt (filled) oder abgelehnt. Der Call-Verkauf wurde abgebrochen.")
+                                                            break
                                             
                                     # Show results
                                     if success_count == len(legs_data):

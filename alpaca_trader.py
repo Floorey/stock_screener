@@ -212,3 +212,32 @@ def cancel_all_orders() -> bool:
     except Exception as e:
         print(f"[Alpaca Trader] Connection error during batch cancellation: {e}")
     return False
+
+def wait_for_order_fill(order_id: str, timeout: int = 15) -> bool:
+    """Polls the status of an Alpaca order until it is filled or times out."""
+    import time
+    if not is_alpaca_configured():
+        return False
+        
+    _, _, base_url = get_alpaca_credentials()
+    url = f"{base_url}/v2/orders/{order_id}"
+    
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        try:
+            response = requests.get(url, headers=get_alpaca_headers(), timeout=5)
+            if response.status_code == 200:
+                order_data = response.json()
+                status = order_data.get("status")
+                if status == "filled":
+                    return True
+                elif status in ["canceled", "rejected", "expired"]:
+                    print(f"[Alpaca] Order {order_id} ended with status: {status}")
+                    return False
+            time.sleep(0.5)
+        except Exception as e:
+            print(f"[Alpaca] Error checking order fill status: {e}")
+            time.sleep(0.5)
+            
+    print(f"[Alpaca] Order {order_id} did not fill within {timeout} seconds.")
+    return False
