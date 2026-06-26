@@ -255,3 +255,67 @@ def close_position(symbol: str) -> bool:
     except Exception as e:
         print(f"[Alpaca Trader] Connection error during position liquidation: {e}")
     return False
+
+def close_position_partial(symbol: str, qty: float) -> Dict[str, Any]:
+    """
+    Closes a partial amount of a position by symbol.
+    Uses the Alpaca DELETE /v2/positions/{symbol}?qty=X endpoint.
+    
+    :param symbol: Ticker symbol (e.g. 'AAPL')
+    :param qty: Number of shares to sell (must be <= current position qty)
+    :returns: Dict with 'status' ('success' or 'error') and details
+    """
+    if not is_alpaca_configured():
+        return {"status": "error", "message": "Alpaca API Keys nicht konfiguriert."}
+        
+    _, _, base_url = get_alpaca_credentials()
+    url = f"{base_url}/v2/positions/{symbol.upper()}"
+    
+    # Format qty: no unnecessary .0 for whole numbers
+    qty_str = str(int(qty)) if isinstance(qty, float) and qty.is_integer() else str(qty)
+    params = {"qty": qty_str}
+    
+    try:
+        response = requests.delete(url, headers=get_alpaca_headers(), params=params, timeout=10)
+        if response.status_code in [200, 201, 204]:
+            try:
+                order_data = response.json()
+            except Exception:
+                order_data = {}
+            return {"status": "success", "order": order_data}
+        else:
+            try:
+                err_msg = response.json().get("message", response.text)
+            except Exception:
+                err_msg = response.text
+            return {"status": "error", "message": f"Alpaca API Error ({response.status_code}): {err_msg}"}
+    except Exception as e:
+        return {"status": "error", "message": f"Verbindungsfehler: {str(e)}"}
+
+def get_position_for_symbol(symbol: str) -> Optional[Dict[str, Any]]:
+    """
+    Fetches the current position for a specific symbol from Alpaca.
+    Returns the position dict or None if no position exists.
+    """
+    if not is_alpaca_configured():
+        return None
+        
+    _, _, base_url = get_alpaca_credentials()
+    url = f"{base_url}/v2/positions/{symbol.upper()}"
+    try:
+        response = requests.get(url, headers=get_alpaca_headers(), timeout=10)
+        if response.status_code == 200:
+            return response.json()
+    except Exception as e:
+        print(f"[Alpaca Trader] Connection error fetching position for {symbol}: {e}")
+    return None
+
+def get_position_qty(symbol: str) -> float:
+    """
+    Returns the current quantity (number of shares) held for a given symbol.
+    Returns 0.0 if no position exists or API is not configured.
+    """
+    pos = get_position_for_symbol(symbol)
+    if pos:
+        return float(pos.get("qty", 0))
+    return 0.0

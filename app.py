@@ -34,7 +34,10 @@ from alpaca_trader import (
     verify_alpaca_connection,
     get_alpaca_credentials,
     wait_for_order_fill,
-    close_position
+    close_position,
+    close_position_partial,
+    get_position_qty,
+    get_position_for_symbol
 )
 
 # Reconfigure encoding to avoid Windows encoding crashes
@@ -1170,25 +1173,62 @@ with tab_trade:
                         hide_index=True
                     )
                     
-                    # Close position form
-                    st.markdown("#### 🚪 Position schließen")
-                    close_col1, close_col2 = st.columns([3, 1])
+                    # Close position form (supports full close AND partial sell)
+                    st.markdown("#### 🚪 Position schließen / Teilverkauf")
+                    close_col1, close_col2 = st.columns([3, 2])
                     with close_col1:
                         position_to_close = st.selectbox(
-                            "Wählen Sie eine Position zum Schließen/Glattstellen:",
+                            "Wählen Sie eine Position:",
                             options=[p["symbol"] for p in positions],
                             format_func=lambda x: f"{x} ({next(item for item in positions if item['symbol'] == x)['qty']} Anteile, GuV: ${float(next(item for item in positions if item['symbol'] == x)['unrealized_pl']):,.2f})",
                             key="position_to_close_select"
                         )
+                    
+                    # Get the selected position's qty
+                    selected_pos_qty = float(next(item for item in positions if item['symbol'] == position_to_close)['qty'])
+                    
                     with close_col2:
-                        st.markdown("<br>", unsafe_allow_html=True)
-                        if st.button("🚪 Glattstellen", use_container_width=True, key="close_position_btn"):
-                            with st.spinner(f"Schließe Position {position_to_close}..."):
-                                if close_position(position_to_close):
-                                    st.success(f"Position {position_to_close} wurde erfolgreich glattgestellt.")
-                                    st.rerun()
-                                else:
-                                    st.error(f"Fehler: Position {position_to_close} konnte nicht geschlossen werden.")
+                        close_mode = st.radio(
+                            "Verkaufsmodus:",
+                            ["🚪 Komplett glattstellen", "✂️ Teilverkauf"],
+                            horizontal=True,
+                            key="close_mode_radio"
+                        )
+                    
+                    if "Teilverkauf" in close_mode:
+                        teil_col1, teil_col2 = st.columns([3, 1])
+                        with teil_col1:
+                            sell_qty = st.slider(
+                                f"Anzahl zu verkaufen (von {selected_pos_qty:.0f} Anteilen):",
+                                min_value=1,
+                                max_value=int(abs(selected_pos_qty)),
+                                value=min(1, int(abs(selected_pos_qty))),
+                                step=1,
+                                key="partial_sell_qty_slider"
+                            )
+                            remaining = abs(selected_pos_qty) - sell_qty
+                            st.markdown(f"📊 **Verkauf:** {sell_qty} Anteile | **Verbleibend nach Verkauf:** {remaining:.0f} Anteile")
+                        with teil_col2:
+                            st.markdown("<br>", unsafe_allow_html=True)
+                            if st.button("✂️ Teilverkauf ausführen", use_container_width=True, key="partial_sell_btn"):
+                                with st.spinner(f"Verkaufe {sell_qty} Anteile von {position_to_close}..."):
+                                    result = close_position_partial(position_to_close, float(sell_qty))
+                                    if result.get("status") == "success":
+                                        st.success(f"✅ {sell_qty} Anteile von {position_to_close} erfolgreich verkauft. Verbleibend: {remaining:.0f} Anteile.")
+                                        st.rerun()
+                                    else:
+                                        st.error(f"Fehler: {result.get('message', 'Unbekannter Fehler')}")
+                    else:
+                        close_btn_col1, close_btn_col2 = st.columns([3, 1])
+                        with close_btn_col2:
+                            st.markdown("<br>", unsafe_allow_html=True)
+                            if st.button("🚪 Komplett glattstellen", use_container_width=True, key="close_position_btn"):
+                                with st.spinner(f"Schließe Position {position_to_close}..."):
+                                    if close_position(position_to_close):
+                                        st.success(f"Position {position_to_close} wurde erfolgreich glattgestellt.")
+                                        st.rerun()
+                                    else:
+                                        st.error(f"Fehler: Position {position_to_close} konnte nicht geschlossen werden.")
                                     
                 st.markdown("### ⏳ Offene Orders")
                 if not open_orders:
@@ -1452,6 +1492,7 @@ with tab_strat:
         [
             "Option A: Synthetischer Short (Bonds Zinswette)",
             "Covered Call / Buy-Write (Income & Upside)",
+            "Covered Call mit bestehenden Aktien (Stillhalter)",
             "Cash-Secured Put (Günstiger Einstieg)",
             "Bear Put Spread (Definierter Risiko-Short)"
         ]
@@ -1628,10 +1669,35 @@ with tab_strat:
                             }
                         ]
                     elif "Covered Call" in strategy_choice:
-                        # Covered Call: Long Stock + Short Call
-                        legs_data = [
-                            {
-                                "Aktion": "KAUF (Stock)",
+                        # Covered Call: Check existing position for coverage
+                        shares_needed = cnt * 100
+                        existing_qty = get_position_qty(strat_ticker) if is_alpaca_configured() else 0.0
+                        shares_to_buy = max(0, shares_needed - int(existing_qty))
+                        
+                        # Determine if using existing shares only
+                        use_existing_only = "bestehenden Aktien" in strategy_choice
+                        
+                        # Show coverage status
+                        if existing_qty >= shares_needed:
+                            st.success(f"✅ **Voll gedeckt:** Sie besitzen bereits {int(existing_qty)} Aktien von {strat_ticker} — das reicht für {cnt} Covered Call Kontrakt(e) ({shares_needed} Aktien benötigt). Es werden keine neuen Aktien gekauft.")
+                            shares_to_buy = 0
+                        elif existing_qty > 0:
+                            coverable_contracts = int(existing_qty) // 100
+                            if use_existing_only:
+                                st.warning(f"⚠️ **Teilweise gedeckt:** Sie besitzen {int(existing_qty)} Aktien von {strat_ticker} — das reicht nur für {coverable_contracts} Kontrakt(e). Für {cnt} Kontrakt(e) fehlen {shares_to_buy} Aktien. Bei 'Bestehende Aktien' werden keine neuen gekauft.")
+                            else:
+                                st.info(f"📊 **Teilweise gedeckt:** Sie besitzen bereits {int(existing_qty)} Aktien von {strat_ticker}. Es werden nur {shares_to_buy} zusätzliche Aktien gekauft (statt {shares_needed}).")
+                        elif existing_qty == 0 and use_existing_only:
+                            st.error(f"❌ **Keine Aktien vorhanden:** Sie besitzen keine Aktien von {strat_ticker}. Für einen Covered Call mit bestehenden Aktien benötigen Sie mindestens {shares_needed} Aktien im Portfolio.")
+                        else:
+                            st.info(f"📊 Keine bestehende Position in {strat_ticker}. Es werden {shares_needed} Aktien gekauft.")
+                        
+                        legs_data = []
+                        
+                        # Only add stock buy leg if needed (and not in "existing shares only" mode)
+                        if shares_to_buy > 0 and not use_existing_only:
+                            legs_data.append({
+                                "Aktion": f"KAUF ({shares_to_buy} Aktien)",
                                 "Symbol": strat_ticker,
                                 "Typ": "Aktie",
                                 "Strike": "N/A",
@@ -1639,16 +1705,37 @@ with tab_strat:
                                 "Ask": "N/A",
                                 "Mitte-Preis": f"${underlying_price:.2f}",
                                 "Effekt": "Debit (Kauf Aktien)",
-                                "Kosten/Einnahme": -underlying_price * 100 * cnt,
+                                "Kosten/Einnahme": -underlying_price * shares_to_buy,
                                 "Alpaca_Action": {
                                     "symbol": strat_ticker,
-                                    "qty": cnt * 100,
+                                    "qty": shares_to_buy,
                                     "side": "buy",
                                     "type": "market",
                                     "limit_price": None
                                 }
-                            },
-                            {
+                            })
+                        elif shares_to_buy == 0:
+                            legs_data.append({
+                                "Aktion": f"BESTAND ({int(existing_qty)} Aktien als Cover)",
+                                "Symbol": strat_ticker,
+                                "Typ": "Aktie (bestehend)",
+                                "Strike": "N/A",
+                                "Bid": "N/A",
+                                "Ask": "N/A",
+                                "Mitte-Preis": f"${underlying_price:.2f}",
+                                "Effekt": "Kein Kauf nötig (bestehende Position)",
+                                "Kosten/Einnahme": 0.0,
+                                "Alpaca_Action": None  # No order needed
+                            })
+                        
+                        # Always add the Short Call leg (the actual income-generating part)
+                        # Determine how many contracts can actually be covered
+                        actual_contracts = cnt
+                        if use_existing_only:
+                            actual_contracts = min(cnt, int(existing_qty) // 100)
+                        
+                        if actual_contracts > 0:
+                            legs_data.append({
                                 "Aktion": "VERKAUF (Short Call)",
                                 "Symbol": c_symbol,
                                 "Typ": "Call",
@@ -1657,16 +1744,15 @@ with tab_strat:
                                 "Ask": f"${c_con['ask']:.2f}",
                                 "Mitte-Preis": f"${c_mid:.2f}",
                                 "Effekt": "Credit (Eingenommene Prämie)",
-                                "Kosten/Einnahme": c_mid * 100 * cnt,
+                                "Kosten/Einnahme": c_mid * 100 * actual_contracts,
                                 "Alpaca_Action": {
                                     "symbol": c_symbol,
-                                    "qty": cnt,
+                                    "qty": actual_contracts,
                                     "side": "sell",
                                     "type": "limit",
                                     "limit_price": c_bid
                                 }
-                            }
-                        ]
+                            })
                     elif "Cash-Secured Put" in strategy_choice:
                         # Cash-Secured Put: Short Put
                         legs_data = [
@@ -1784,12 +1870,21 @@ with tab_strat:
                         * **Absicherung (Stop-Loss):** Falls TLT/IEF um mehr als 5% über den Strike-Kurs (${k_val:.2f}) steigt, sollte die Position manuell geschlossen werden, da der ungedeckte Short Call ein unbegrenztes Risiko darstellt.
                         """)
                     elif "Covered Call" in strategy_choice:
-                        st.markdown(f"""
+                        if "bestehenden Aktien" in strategy_choice:
+                            st.markdown(f"""
+                        **Covered Call mit bestehenden Aktien (Stillhalter)**
+                        * **These:** Zusätzliches Einkommen aus einer bestehenden Aktienposition durch Prämienverkauf.
+                        * **Mechanik:** Sie nutzen Ihre {strat_ticker}-Aktien im Portfolio als Cover und verkaufen eine Call-Option ({c_symbol}) mit Strike ${k_val:.2f}. Da die Aktien bereits im Depot liegen, entstehen keine Kaufkosten — nur die Prämie wird eingenommen.
+                        * **Ausgang:** Steigt die Aktie über ${k_val:.2f}, werden Ihre bestehenden Aktien zum Strike verkauft (Gewinn deckelt bei Strike + Prämie). Bleibt sie darunter, behalten Sie die Aktien und die Prämie.
+                        * **Vorteil:** Kein zusätzliches Kapital nötig — Ihre physischen Aktien dienen als Cover, wodurch Alpaca die Position als gedeckt (covered) erkennt.
+                            """)
+                        else:
+                            st.markdown(f"""
                         **Covered Call / Buy-Write**
                         * **These:** Moderate Aufwärtsbewegung oder Seitwärtsphase des Underlyings.
-                        * **Mechanik:** Sie erwerben 100 Aktien von {strat_ticker} zum Kurs von ${underlying_price:.2f} und verkaufen zeitgleich eine Call-Option ({c_symbol}) mit Strike ${k_val:.2f}. Die eingenommene Prämie erhöht die Rendite Ihres Aktienbestands.
+                        * **Mechanik:** Sie erwerben Aktien von {strat_ticker} zum Kurs von ${underlying_price:.2f} und verkaufen zeitgleich eine Call-Option ({c_symbol}) mit Strike ${k_val:.2f}. Die eingenommene Prämie erhöht die Rendite Ihres Aktienbestands.
                         * **Ausgang:** Steigt die Aktie über ${k_val:.2f}, werden Ihre Aktien zum Strike verkauft (Gewinn deckelt bei Strike + Prämie). Bleibt sie darunter, behalten Sie die Aktien und die Prämie.
-                        """)
+                            """)
                     elif "Cash-Secured Put" in strategy_choice:
                         st.markdown(f"""
                         **Cash-Secured Put**
@@ -1838,6 +1933,14 @@ with tab_strat:
                                 # Naked Call margin is roughly 20% of strike * 100 * contracts (Alpaca requirement)
                                 strike_val = c_con['strike']
                                 required_bp = (strike_val * 100.0 * cnt) * 0.20
+                            elif "Covered Call" in strategy_choice:
+                                # Covered Call: If existing shares cover the position, no stock buy needed
+                                # Only need buying power if we have to purchase additional shares
+                                if shares_to_buy > 0 and not use_existing_only:
+                                    required_bp = underlying_price * shares_to_buy
+                                else:
+                                    required_bp = 0.0  # Fully covered by existing position
+                                    st.success(f"🛡️ **Kein zusätzliches Kapital nötig** — Ihre bestehenden Aktien decken die Short-Call-Position.")
                             elif "Bear Put Spread" in strategy_choice:
                                 # Collateral is the width of the strikes (ATM Put strike - OTM Put strike)
                                 try:
@@ -1867,6 +1970,13 @@ with tab_strat:
                                     success_count = 0
                                     for idx, leg in enumerate(legs_data):
                                         act = leg["Alpaca_Action"]
+                                        
+                                        # Skip legs without Alpaca action (e.g. existing stock positions used as cover)
+                                        if act is None:
+                                            responses.append((leg["Aktion"], {"status": "success", "order": {"id": "N/A (Bestand)", "status": "bestehende Position"}}))
+                                            success_count += 1
+                                            continue
+                                        
                                         res = place_order(
                                             symbol=act["symbol"],
                                             qty=act["qty"],
@@ -1881,7 +1991,7 @@ with tab_strat:
                                             # Covered Call race condition protection:
                                             # If this is a Covered Call and Leg 1 (KAUF Stock) succeeds,
                                             # wait for the stock buy order to be filled before placing Leg 2 (Short Call).
-                                            if "Covered Call" in strategy_choice and idx == 0:
+                                            if "Covered Call" in strategy_choice and idx == 0 and act.get("side") == "buy":
                                                 order_id = res.get("order", {}).get("id")
                                                 if order_id:
                                                     with st.spinner("Warte darauf, dass der Aktienkauf bei Alpaca ausgeführt (filled) wird..."):
