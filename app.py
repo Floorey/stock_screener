@@ -16,6 +16,7 @@ from watchlist_manager import load_watchlist, add_to_watchlist, remove_from_watc
 from macro_fetcher import fetch_macro_futures, search_polymarket_markets, fetch_company_news, fetch_wsb_trending
 from report_generator import generate_pdf_report
 from options_ui import render_options_tab
+from cashflow_ui import render_cashflow_tab
 from risk_manager import (
     fetch_portfolio_positions,
     calculate_portfolio_var,
@@ -204,12 +205,13 @@ if "macro_futures_df" in st.session_state and not st.session_state["macro_future
     )
 
 # Initialize Tabs
-tab1, tab_wl, tab_opt, tab2, tab_trade, tab_strat, tab_risk, tab3 = st.tabs([
+tab1, tab_wl, tab_opt, tab2, tab_trade, tab_cash, tab_strat, tab_risk, tab3 = st.tabs([
     "🎯 Screener Dashboard", 
     "⭐ Watchlist Manager", 
     "🎫 Options-Screener",
     "📈 Einzelwert-Analyse", 
     "💼 Alpaca Trading",
+    "💸 Cashflow-Management",
     "⚡ Strategie-Desk (Option A)",
     "🛡️ Risk-Manager & Stress-Test",
     "📄 PDF Finanzbericht Analyzer"
@@ -1473,6 +1475,13 @@ with tab_trade:
                     st.error("Zeitüberschreitung: Das Skript hat länger als 30 Sekunden für die Ausführung benötigt.")
                 except Exception as e:
                     st.error(f"Fehler beim Ausführen des Skripts: {e}")
+
+
+# ----------------------------------------------------
+# TAB CASH: CASHFLOW MANAGEMENT
+# ----------------------------------------------------
+with tab_cash:
+    render_cashflow_tab(get_single_ticker_data, calculate_scores)
 
 
 # ----------------------------------------------------

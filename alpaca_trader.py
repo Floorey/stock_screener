@@ -319,3 +319,30 @@ def get_position_qty(symbol: str) -> float:
     if pos:
         return float(pos.get("qty", 0))
     return 0.0
+
+def get_account_activities(activity_types: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    """
+    Fetches account activity from Alpaca.
+    Useful for retrieving trade fills, dividends, fees, etc.
+    """
+    if not is_alpaca_configured():
+        return []
+        
+    _, _, base_url = get_alpaca_credentials()
+    url = f"{base_url}/v2/account/activities"
+    
+    headers = get_alpaca_headers()
+    params = {}
+    if activity_types:
+        params["activity_types"] = ",".join(activity_types)
+        
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=10)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            print(f"[Alpaca Trader] Activities fetch failed: Status {response.status_code} - {response.text}")
+    except Exception as e:
+        print(f"[Alpaca Trader] Connection error during activities fetch: {e}")
+    return []
+
