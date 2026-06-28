@@ -10,7 +10,9 @@ from pdf_analyzer import (
     search_keywords_in_pdf,
     scan_for_financial_metrics,
     fetch_sec_filings,
-    download_and_parse_filing
+    download_and_parse_filing,
+    detect_report_locale,
+    extract_structured_financials
 )
 from watchlist_manager import load_watchlist, add_to_watchlist, remove_from_watchlist
 from macro_fetcher import fetch_macro_futures, search_polymarket_markets, fetch_company_news, fetch_wsb_trending
@@ -2324,29 +2326,144 @@ with tab3:
             st.success("Bericht erfolgreich zurückgesetzt.")
             st.rerun()
             
+        # Language/Locale detection and format configuration
+        pages_data = st.session_state["pages_data"]
+        
+        if "report_locale" not in st.session_state or st.session_state.get("last_loaded_name_for_locale") != st.session_state["loaded_report_name"]:
+            st.session_state["report_locale"] = detect_report_locale(pages_data)
+            st.session_state["last_loaded_name_for_locale"] = st.session_state["loaded_report_name"]
+            
+        detected_lang = st.session_state["report_locale"]
+        
+        col_lang1, col_lang2 = st.columns([3, 2])
+        with col_lang1:
+            st.markdown(f"🌐 **Erkannte Berichtssprache:** {'🇩🇪 Deutsch' if detected_lang == 'de' else '🇺🇸 Englisch (US)'}")
+        with col_lang2:
+            format_override = st.selectbox(
+                "Zahlenformat für die Extraktion:",
+                ["Automatisch (Erkannt)", "US-Format (z.B. 12,500.00)", "Deutsches Format (z.B. 12.500,00)"],
+                index=0
+            )
+            
+        if format_override == "US-Format (z.B. 12,500.00)":
+            effective_locale = "en"
+        elif format_override == "Deutsches Format (z.B. 12.500,00)":
+            effective_locale = "de"
+        else:
+            effective_locale = detected_lang
+            
+        st.markdown("---")
+
         # Interactive functions
         analysis_mode = st.radio(
             "Analyse-Modus wählen",
-            ["Automatischer Scan nach Schlüsseldaten", "Stichwortsuche (Keywords)"]
+            ["Automatischer Scan nach Schlüsseldaten", "Stichwortsuche (Keywords)"],
+            horizontal=True
         )
-        
-        pages_data = st.session_state["pages_data"]
         
         # Option 1: Automated Financial Scan
         if analysis_mode == "Automatischer Scan nach Schlüsseldaten":
             st.markdown("### 🔍 Gefundene Finanzzahlen im Bericht")
-            st.info("Dieses Tool scannt Zeilen mit Zahlen, die typische Finanzbegriffe wie 'Revenue', 'Net Income', 'Operating Cash Flow' oder 'Debt' enthalten.")
+            st.info("Dieses Tool scannt Zeilen mit Zahlen, die typische Finanzbegriffe wie 'Revenue', 'Net Income', 'Operating Cash Flow' oder 'Debt' enthalten, und strukturiert diese nach Jahr.")
             
-            findings = scan_for_financial_metrics(pages_data)
-            
-            for metric, items in findings.items():
-                with st.expander(f"📌 {metric} (Gefundene Treffer: {len(items)})"):
-                    if not items:
-                        st.write("Keine direkten Treffer gefunden.")
+            with st.spinner("Extrahiere und strukturiere Finanzkennzahlen..."):
+                extracted = extract_structured_financials(pages_data, locale=effective_locale)
+                
+            if not extracted:
+                st.warning("Keine strukturierten Finanzkennzahlen im Bericht gefunden.")
+            else:
+                extracted_df = pd.DataFrame(extracted)
+                
+                # Metrics Summary Cards
+                col_m1, col_m2, col_m3 = st.columns(3)
+                with col_m1:
+                    st.metric("Treffer gesamt", f"{len(extracted_df)} Kennzahlen")
+                with col_m2:
+                    years_found = extracted_df["Year"].dropna().unique()
+                    if len(years_found) > 0:
+                        st.metric("Zeitraum", f"{int(min(years_found))} - {int(max(years_found))}")
                     else:
-                        for item in items:
-                            st.markdown(f"**Abschnitt/Seite {item['page']}:** `{item['line']}`")
-                            
+                        st.metric("Zeitraum", "Keine Jahreszahl")
+                with col_m3:
+                    st.metric("Dokumentenlänge", f"{len(pages_data)} Seiten")
+                    
+                # Pivot table for comparison
+                st.markdown("#### 📊 Finanzkennzahlen im Zeitverlauf (in Millionen)")
+                df_clean = extracted_df[extracted_df["Year"].notna()].copy()
+                df_clean["Year"] = df_clean["Year"].astype(int)
+                
+                if df_clean.empty:
+                    st.warning("Keine Werte mit zuordenbaren Jahreszahlen gefunden. Die Detailtabelle unten enthält alle Rohfunde.")
+                else:
+                    df_pivot = df_clean.pivot_table(
+                        index="Metric",
+                        columns="Year",
+                        values="Value (Mio)",
+                        aggfunc="first"
+                    )
+                    
+                    # Reindex for financial layout order
+                    desired_order = [
+                        "Revenue / Umsatz",
+                        "Operating Income / EBIT / Betriebsergebnis",
+                        "Net Income / Konzernergebnis",
+                        "Cash Flow",
+                        "Total Debt / Verbindlichkeiten"
+                    ]
+                    existing_order = [m for m in desired_order if m in df_pivot.index]
+                    other_metrics = [m for m in df_pivot.index if m not in desired_order]
+                    df_pivot = df_pivot.reindex(existing_order + other_metrics)
+                    
+                    # Safe applymap/map depending on pandas version
+                    if hasattr(df_pivot, "map"):
+                        df_pivot_display = df_pivot.map(lambda x: f"{x:,.2f} Mio." if pd.notna(x) else "-")
+                    else:
+                        df_pivot_display = df_pivot.applymap(lambda x: f"{x:,.2f} Mio." if pd.notna(x) else "-")
+                        
+                    # Display pivot table
+                    st.dataframe(df_pivot_display, use_container_width=True)
+                    
+                    # Plotting Section
+                    st.markdown("#### 📈 Grafische Visualisierung")
+                    chart_metric = st.selectbox(
+                        "Wählen Sie eine Kennzahl zum Visualisieren:",
+                        options=sorted(list(df_clean["Metric"].unique()))
+                    )
+                    
+                    chart_data = df_clean[df_clean["Metric"] == chart_metric]
+                    if not chart_data.empty:
+                        # Aggregate by year (max/first)
+                        chart_df = chart_data.groupby("Year")["Value (Mio)"].max().reset_index()
+                        chart_df = chart_df.set_index("Year")
+                        
+                        # Draw chart
+                        st.bar_chart(chart_df, use_container_width=True)
+                        
+                # Source Details Expander
+                st.markdown("---")
+                with st.expander("📂 Quellennachweis & Rohdaten anzeigen"):
+                    st.markdown("Hier sehen Sie die genauen Quellensätze und Seitenzahlen, aus denen die obigen Werte extrahiert wurden:")
+                    st.dataframe(
+                        extracted_df[["Metric", "Year", "Raw Value", "Value (Mio)", "Page", "Context"]],
+                        column_config={
+                            "Page": st.column_config.NumberColumn("Seite", format="%d"),
+                            "Year": st.column_config.NumberColumn("Jahr", format="%d"),
+                            "Value (Mio)": st.column_config.NumberColumn("Wert (Mio)", format="%.2f"),
+                            "Context": st.column_config.TextColumn("Quellsatz / Kontext", width="large")
+                        },
+                        hide_index=True,
+                        use_container_width=True
+                    )
+                    
+                    # Download button for CSV
+                    csv_data = extracted_df.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        "📥 Extrahierte Daten als CSV herunterladen",
+                        data=csv_data,
+                        file_name=f"financial_extract_{st.session_state['loaded_report_name']}.csv",
+                        mime="text/csv"
+                    )
+                    
         # Option 2: Custom Keyword Search
         elif analysis_mode == "Stichwortsuche (Keywords)":
             st.markdown("### 🔑 Stichwortsuche im Bericht")
@@ -2362,21 +2479,79 @@ with tab3:
                 with st.spinner("Durchsuche Bericht..."):
                     matches = search_keywords_in_pdf(pages_data, keywords)
                     
-                st.write(f"Insgesamt **{len(matches)} Treffer** für die Begriffe `{keywords}` gefunden:")
-                
-                # Display matches in a clean table or list
-                if matches:
+                if not matches:
+                    st.info("Keine Treffer für die eingegebenen Begriffe gefunden.")
+                else:
                     matches_df = pd.DataFrame(matches)
-                    st.dataframe(matches_df, use_container_width=True)
                     
+                    # Summary metrics
+                    col_k1, col_k2, col_k3 = st.columns(3)
+                    with col_k1:
+                        st.metric("Treffer gesamt", f"{len(matches_df)}")
+                    with col_k2:
+                        st.metric("Unique Begriffe", f"{matches_df['keyword'].nunique()}")
+                    with col_k3:
+                        st.metric("Seiten mit Treffern", f"{matches_df['page'].nunique()}")
+                        
+                    # Visualizations Tab
+                    st.markdown("#### 📊 Verteilung der Treffer")
+                    vis_col1, vis_col2 = st.columns(2)
+                    
+                    with vis_col1:
+                        st.markdown("**Häufigkeit nach Suchbegriff**")
+                        kw_counts = matches_df["keyword"].value_counts()
+                        st.bar_chart(kw_counts, use_container_width=True)
+                        
+                    with vis_col2:
+                        st.markdown("**Verteilung über Dokumentenverlauf (Seiten)**")
+                        # Count matches per page
+                        page_counts = matches_df.groupby("page").size().reset_index(name="Treffer")
+                        # Reindex to show all pages
+                        all_pages = pd.DataFrame({"page": range(1, len(pages_data) + 1)})
+                        page_dist = pd.merge(all_pages, page_counts, on="page", how="left").fillna(0)
+                        page_dist = page_dist.set_index("page")
+                        st.area_chart(page_dist, use_container_width=True)
+                        
+                    # Highlighted Matches list & filter
+                    st.markdown("#### 📋 Gefundene Treffer nach Seite / Begriff filtern")
+                    
+                    filter_col1, filter_col2 = st.columns(2)
+                    with filter_col1:
+                        selected_kw = st.selectbox(
+                            "Filtern nach Suchbegriff:",
+                            ["Alle"] + list(matches_df["keyword"].unique())
+                        )
+                    with filter_col2:
+                        selected_page = st.selectbox(
+                            "Filtern nach Seite:",
+                            ["Alle"] + sorted(list(matches_df["page"].unique()))
+                        )
+                        
+                    # Filter data
+                    filtered_df = matches_df.copy()
+                    if selected_kw != "Alle":
+                        filtered_df = filtered_df[filtered_df["keyword"] == selected_kw]
+                    if selected_page != "Alle":
+                        filtered_df = filtered_df[filtered_df["page"] == selected_page]
+                        
+                    st.markdown(f"Zeige **{len(filtered_df)}** gefilterte Treffer:")
+                    
+                    # Display snippets in a styled list
+                    for idx, row in filtered_df.head(100).iterrows():
+                        st.markdown(f"**Seite {row['page']}** | Begriff: `{row['keyword']}`")
+                        st.markdown(row["context"])
+                        st.markdown("---")
+                        
+                    if len(filtered_df) > 100:
+                        st.info("Es werden nur die ersten 100 Treffer angezeigt. Nutzen Sie die Filter, um die Auswahl einzugrenzen.")
+                        
+                    # Download button for CSV
                     csv_matches = matches_df.to_csv(index=False).encode('utf-8')
                     st.download_button(
-                        "📥 Suchergebnisse herunterladen",
+                        "📥 Alle Suchergebnisse herunterladen (CSV)",
                         data=csv_matches,
-                        file_name="report_search_results.csv",
+                        file_name=f"keyword_search_{st.session_state['loaded_report_name']}.csv",
                         mime="text/csv"
                     )
-                else:
-                    st.write("Keine Treffer gefunden.")
 
 
