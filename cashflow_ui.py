@@ -276,28 +276,33 @@ def render_cashflow_tab(get_single_ticker_data, calculate_scores):
                 plt.tight_layout()
                 st.pyplot(fig)
                 
-                # Chart 2: Category breakdown pie chart
+                # Chart 2: Category breakdown pie chart (Only positive cash inflows to prevent matplotlib ValueError)
                 cat_data = ledger_df.groupby("Type")["Amount"].sum()
-                fig2, ax2 = plt.subplots(figsize=(6, 3.5), facecolor='#1f2937')
-                ax2.set_facecolor('#1f2937')
+                cat_data = cat_data[cat_data > 0]
                 
-                colors_list = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#9ca3af']
-                wedges, texts, autotexts = ax2.pie(
-                    cat_data.values, 
-                    labels=cat_data.index, 
-                    autopct='%1.1f%%',
-                    startangle=90, 
-                    colors=colors_list[:len(cat_data)],
-                    textprops={'color': '#f3f4f6', 'fontsize': 8}
-                )
-                for autotext in autotexts:
-                    autotext.set_color('white')
-                    autotext.set_weight('bold')
+                if not cat_data.empty:
+                    fig2, ax2 = plt.subplots(figsize=(6, 3.5), facecolor='#1f2937')
+                    ax2.set_facecolor('#1f2937')
                     
-                ax2.axis('equal')  
-                ax2.set_title("Cashflow nach Kategorien", color='#f3f4f6', fontsize=11, fontweight='bold', pad=10)
-                plt.tight_layout()
-                st.pyplot(fig2)
+                    colors_list = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#9ca3af']
+                    wedges, texts, autotexts = ax2.pie(
+                        cat_data.values, 
+                        labels=cat_data.index, 
+                        autopct='%1.1f%%',
+                        startangle=90, 
+                        colors=colors_list[:len(cat_data)],
+                        textprops={'color': '#f3f4f6', 'fontsize': 8}
+                    )
+                    for autotext in autotexts:
+                        autotext.set_color('white')
+                        autotext.set_weight('bold')
+                        
+                    ax2.axis('equal')  
+                    ax2.set_title("Cashflow-Einnahmen nach Kategorien", color='#f3f4f6', fontsize=11, fontweight='bold', pad=10)
+                    plt.tight_layout()
+                    st.pyplot(fig2)
+                else:
+                    st.info("Keine positiven Cashflow-Einnahmen für Verteilungs-Kreisdiagramm vorhanden.")
             else:
                 st.info("Fügen Sie Transaktionen hinzu, um Visualisierungen anzuzeigen.")
                 
