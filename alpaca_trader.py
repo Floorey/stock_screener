@@ -3,8 +3,8 @@ import requests
 from typing import Dict, Any, List, Optional
 from dotenv import load_dotenv
 
-# Ensure env vars are loaded
-load_dotenv()
+# Ensure env vars are loaded and override any stale cache
+load_dotenv(override=True)
 
 def get_alpaca_credentials() -> tuple[Optional[str], Optional[str], str]:
     """Retrieves Alpaca API credentials from environment variables or active session."""

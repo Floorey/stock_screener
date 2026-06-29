@@ -23,7 +23,7 @@ from options_advisor import (
 )
 
 # Load environment
-load_dotenv()
+load_dotenv(override=True)
 
 # Path for persistent cashflow ledger
 LEDGER_PATH = os.path.join(os.path.dirname(__file__), "cashflow_ledger.csv")
@@ -198,6 +198,54 @@ def render_cashflow_tab(get_single_ticker_data, calculate_scores):
             
         st.markdown("<br>", unsafe_allow_html=True)
         
+        # Alpaca Live Account Metrics
+        if is_alpaca_configured():
+            try:
+                alpaca_acc = get_account_info()
+                if alpaca_acc:
+                    st.markdown("### 🦙 Alpaca Live-Konto (Echtzeit-Daten)")
+                    alp_col1, alp_col2, alp_col3, alp_col4 = st.columns(4)
+                    with alp_col1:
+                        st.markdown(f"""
+                        <div class="metric-card" style="text-align: center; border: 1px solid #10b981;">
+                            <span style="font-size: 0.9rem; color: #9ca3af;">Alpaca Live Cash</span>
+                            <h2 style="margin: 0.5rem 0; color: #10b981;">${float(alpaca_acc.get('cash', 0)):,.2f}</h2>
+                            <span style="font-size: 0.8rem; color: #9ca3af;">Freies Barvermögen</span>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    with alp_col2:
+                        st.markdown(f"""
+                        <div class="metric-card" style="text-align: center; border: 1px solid #3b82f6;">
+                            <span style="font-size: 0.9rem; color: #9ca3af;">Alpaca Portfolio-Wert (Equity)</span>
+                            <h2 style="margin: 0.5rem 0; color: #3b82f6;">${float(alpaca_acc.get('equity', 0)):,.2f}</h2>
+                            <span style="font-size: 0.8rem; color: #9ca3af;">Gesamt-Eigenkapital</span>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    with alp_col3:
+                        st.markdown(f"""
+                        <div class="metric-card" style="text-align: center; border: 1px solid #8b5cf6;">
+                            <span style="font-size: 0.9rem; color: #9ca3af;">Alpaca Kaufkraft</span>
+                            <h2 style="margin: 0.5rem 0; color: #8b5cf6;">${float(alpaca_acc.get('buying_power', 0)):,.2f}</h2>
+                            <span style="font-size: 0.8rem; color: #9ca3af;">Optionen-Kaufkraft: ${float(alpaca_acc.get('options_buying_power', 0)):,.2f}</span>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    with alp_col4:
+                        from alpaca_trader import get_alpaca_credentials
+                        _, _, base_url = get_alpaca_credentials()
+                        account_mode = "LIVE" if "live" in base_url.lower() else "PAPER"
+                        st.markdown(f"""
+                        <div class="metric-card" style="text-align: center; border: 1px solid #f59e0b;">
+                            <span style="font-size: 0.9rem; color: #9ca3af;">Handels-Modus</span>
+                            <h2 style="margin: 0.5rem 0; color: #f59e0b;">{account_mode}</h2>
+                            <span style="font-size: 0.8rem; color: #9ca3af;">Konto-Status: {alpaca_acc.get('status', 'ACTIVE')}</span>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    st.markdown("<br>", unsafe_allow_html=True)
+            except Exception as e:
+                st.warning(f"Konnte Live-Daten von Alpaca nicht laden: {e}")
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        
         # Visualizations & Table side-by-side
         v_col, t_col = st.columns([1, 1])
         
@@ -322,6 +370,19 @@ def render_cashflow_tab(get_single_ticker_data, calculate_scores):
                         delete_transaction(tx_to_del)
                         st.success("Buchung erfolgreich gelöscht!")
                         st.rerun()
+                        
+                with st.expander("⚠️ Cashflow-Buch zurücksetzen", expanded=False):
+                    st.markdown("<small style='color: #ef4444;'>Warnung: Dies löscht alle Buchungen dauerhaft aus dem lokalen Cashflow-Buch (cashflow_ledger.csv).</small>", unsafe_allow_html=True)
+                    confirm_reset = st.checkbox("Ja, ich möchte das Cashflow-Buch komplett leeren.", value=False, key="confirm_ledger_reset_check")
+                    if st.button("🚨 Ledger komplett leeren", use_container_width=True, disabled=not confirm_reset, key="execute_ledger_reset_btn"):
+                        try:
+                            # Create empty ledger dataframe
+                            empty_df = pd.DataFrame(columns=["ID", "Date", "Ticker", "Type", "Description", "Amount", "Source"])
+                            save_ledger(empty_df)
+                            st.success("Cashflow-Buch wurde erfolgreich geleert!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Fehler beim Leeren des Cashflow-Buchs: {e}")
                         
         # --- ALPACA SYNC ENGINE ---
         st.markdown("---")

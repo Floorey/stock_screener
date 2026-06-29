@@ -1,4 +1,6 @@
 import streamlit as st
+from dotenv import load_dotenv
+load_dotenv(override=True)
 import pandas as pd
 import os
 import sys
@@ -177,6 +179,32 @@ with st.sidebar.expander("🦙 Alpaca Integration (Optional)", expanded=False):
         os.environ["ALPACA_SECRET_KEY"] = alpaca_secret.strip()
     if alpaca_url:
         os.environ["ALPACA_BASE_URL"] = alpaca_url.strip()
+
+    # Save to .env button
+    if alpaca_key or alpaca_secret:
+        if st.button("Schlüssel in .env speichern", use_container_width=True):
+            env_path = os.path.join(os.path.dirname(__file__), ".env")
+            try:
+                lines = []
+                if os.path.exists(env_path):
+                    with open(env_path, "r", encoding="utf-8") as f:
+                        lines = f.readlines()
+                
+                new_lines = []
+                for line in lines:
+                    if not any(line.strip().startswith(prefix) for prefix in ["ALPACA_API_KEY=", "ALPACA_SECRET_KEY=", "ALPACA_BASE_URL="]):
+                        new_lines.append(line)
+                
+                new_lines.append(f"ALPACA_API_KEY={alpaca_key.strip()}\n")
+                new_lines.append(f"ALPACA_SECRET_KEY={alpaca_secret.strip()}\n")
+                new_lines.append(f"ALPACA_BASE_URL={alpaca_url.strip()}\n")
+                
+                with open(env_path, "w", encoding="utf-8") as f:
+                    f.writelines(new_lines)
+                st.success("Erfolgreich in .env gespeichert!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Fehler beim Speichern: {e}")
 
     # Visual connection status check
     if os.getenv("ALPACA_API_KEY") or os.getenv("ALPACA_SECRET_KEY"):
@@ -1179,14 +1207,30 @@ with tab_trade:
                     
                     # Close position form (supports full close AND partial sell)
                     st.markdown("#### 🚪 Position schließen / Teilverkauf")
+                    
+                    # Sort symbols alphabetically to ensure stable selectbox order
+                    position_symbols = sorted([p["symbol"] for p in positions])
+                    
+                    # Track selected position in session state to prevent selection jumping
+                    if "last_selected_position" not in st.session_state or st.session_state["last_selected_position"] not in position_symbols:
+                        st.session_state["last_selected_position"] = position_symbols[0] if position_symbols else None
+                    
+                    default_idx = 0
+                    if st.session_state["last_selected_position"] in position_symbols:
+                        default_idx = position_symbols.index(st.session_state["last_selected_position"])
+                    
                     close_col1, close_col2 = st.columns([3, 2])
                     with close_col1:
                         position_to_close = st.selectbox(
                             "Wählen Sie eine Position:",
-                            options=[p["symbol"] for p in positions],
+                            options=position_symbols,
+                            index=default_idx,
                             format_func=lambda x: f"{x} ({next(item for item in positions if item['symbol'] == x)['qty']} Anteile, GuV: ${float(next(item for item in positions if item['symbol'] == x)['unrealized_pl']):,.2f})",
                             key="position_to_close_select"
                         )
+                    
+                    # Update session state with current selection
+                    st.session_state["last_selected_position"] = position_to_close
                     
                     # Get the selected position's qty
                     selected_pos_qty = float(next(item for item in positions if item['symbol'] == position_to_close)['qty'])
@@ -1202,13 +1246,14 @@ with tab_trade:
                     if "Teilverkauf" in close_mode:
                         teil_col1, teil_col2 = st.columns([3, 1])
                         with teil_col1:
+                            # Dynamic key based on symbol to isolate slider state per position
                             sell_qty = st.slider(
                                 f"Anzahl zu verkaufen (von {selected_pos_qty:.0f} Anteilen):",
                                 min_value=1,
                                 max_value=int(abs(selected_pos_qty)),
                                 value=min(1, int(abs(selected_pos_qty))),
                                 step=1,
-                                key="partial_sell_qty_slider"
+                                key=f"partial_sell_qty_slider_{position_to_close}"
                             )
                             remaining = abs(selected_pos_qty) - sell_qty
                             st.markdown(f"📊 **Verkauf:** {sell_qty} Anteile | **Verbleibend nach Verkauf:** {remaining:.0f} Anteile")
