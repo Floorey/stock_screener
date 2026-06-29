@@ -6,8 +6,8 @@ import pandas as pd
 from datetime import datetime
 from dotenv import load_dotenv
 
-# Load Alpaca configuration
-load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+# Load Alpaca configuration and override any stale environment variables
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=True)
 
 API_KEY = os.getenv("ALPACA_API_KEY")
 SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
@@ -59,6 +59,55 @@ def sanitize_price(contract_dict: dict, price_type: str, mid_fallback: float) ->
         val = 0.01
     return float(val)
 
+def get_alpaca_option_quote(symbol: str) -> dict:
+    """Fetches the latest quote (bid, ask, mid) for an option contract from Alpaca."""
+    if not API_KEY or not SECRET_KEY:
+        return {}
+    url = "https://data.alpaca.markets/v1beta1/options/quotes/latest"
+    headers_local = {
+        "APCA-API-KEY-ID": API_KEY,
+        "APCA-API-SECRET-KEY": SECRET_KEY,
+        "Content-Type": "application/json"
+    }
+    params = {"symbols": symbol}
+    try:
+        res = requests.get(url, headers=headers_local, params=params, timeout=5)
+        if res.status_code == 200:
+            data = res.json()
+            quotes = data.get("quotes", {})
+            quote = quotes.get(symbol)
+            if quote:
+                bid = float(quote.get("bp", 0.0))
+                ask = float(quote.get("ap", 0.0))
+                mid = (bid + ask) / 2.0 if (bid > 0 and ask > 0) else (bid or ask or 0.0)
+                return {"bid": bid, "ask": ask, "mid": mid}
+    except Exception as e:
+        print(f"Error fetching Alpaca option quote for {symbol}: {e}")
+    return {}
+
+def get_alpaca_option_contracts(underlying: str) -> list[dict]:
+    """Fetches active options contracts for an underlying from Alpaca."""
+    if not API_KEY or not SECRET_KEY:
+        return []
+    url = f"{BASE_URL}/v2/options/contracts"
+    headers_local = {
+        "APCA-API-KEY-ID": API_KEY,
+        "APCA-API-SECRET-KEY": SECRET_KEY,
+        "Content-Type": "application/json"
+    }
+    params = {
+        "underlying_symbol": underlying.upper(),
+        "status": "active",
+        "limit": 1000
+    }
+    try:
+        res = requests.get(url, headers=headers_local, params=params, timeout=5)
+        if res.status_code == 200:
+            return res.json().get("option_contracts", [])
+    except Exception as e:
+        print(f"Error fetching Alpaca options contracts: {e}")
+    return []
+
 def execute_synthetic_swap(ticker: str, direction: str, qty: int, strike: float = None, expiry: str = None) -> bool:
     """
     Executes a Synthetic Swap (Long or Short) using Option contracts.
@@ -97,11 +146,30 @@ def execute_synthetic_swap(ticker: str, direction: str, qty: int, strike: float 
     tk = yf.Ticker(ticker)
     
     # 1. Resolve current price of underlying
+    current_price = None
     try:
         hist = tk.history(period="1d")
-        current_price = hist["Close"].iloc[-1] if not hist.empty else 100.0
+        if not hist.empty:
+            current_price = float(hist["Close"].iloc[-1])
     except Exception as e:
-        print(f"Error fetching current price for {ticker}: {e}")
+        print(f"yfinance price fetch failed: {e}. Trying Alpaca Data API...")
+        
+    if current_price is None:
+        # Fallback to Alpaca Data API
+        if API_KEY and SECRET_KEY:
+            try:
+                url = f"https://data.alpaca.markets/v2/stocks/{ticker}/trades/latest"
+                res = requests.get(url, headers=headers, timeout=5)
+                if res.status_code == 200:
+                    trade_data = res.json()
+                    current_price = trade_data.get("trade", {}).get("p")
+                    if current_price:
+                        print(f"Loaded price from Alpaca Data API: ${current_price:.2f}")
+            except Exception as e:
+                print(f"Alpaca Data API price fetch failed: {e}")
+                
+    if current_price is None:
+        print(f"Error: Could not resolve current price for {ticker} (Yahoo rate limited & Alpaca failed).")
         return False
         
     print(f"Current Stock Price: ${current_price:.2f}")
@@ -111,7 +179,21 @@ def execute_synthetic_swap(ticker: str, direction: str, qty: int, strike: float 
         strike = float(round(current_price))
         
     # 3. Resolve expiry date if not provided (approx 30 days DTE)
-    options = list(tk.options)
+    options = []
+    try:
+        options = list(tk.options)
+    except Exception as e:
+        print(f"yfinance options list fetch failed: {e}. Trying Alpaca...")
+        
+    if not options:
+        # Fallback to Alpaca
+        print("Fetching option expirations from Alpaca...")
+        contracts = get_alpaca_option_contracts(ticker)
+        if contracts:
+            # Extract unique expiration dates
+            expiries = sorted(list(set(c.get("expiration_date") for c in contracts if c.get("expiration_date"))))
+            options = expiries
+            
     if not options:
         print(f"Error: No option chains available for {ticker}!")
         return False
@@ -143,6 +225,10 @@ def execute_synthetic_swap(ticker: str, direction: str, qty: int, strike: float 
         return False
     
     # 4. Fetch option chain details
+    call_con = None
+    put_con = None
+    use_yfinance_chain = True
+    
     try:
         chain = tk.option_chain(expiry)
         calls_df = chain.calls
@@ -152,47 +238,84 @@ def execute_synthetic_swap(ticker: str, direction: str, qty: int, strike: float 
         call_con = calls_df.iloc[(calls_df['strike'] - strike).abs().argsort()[:1]].iloc[0].to_dict()
         put_con = puts_df.iloc[(puts_df['strike'] - strike).abs().argsort()[:1]].iloc[0].to_dict()
     except Exception as e:
-        print(f"Error loading option chain data: {e}")
-        return False
+        print(f"yfinance option chain fetch failed: {e}. Falling back to Alpaca...")
+        use_yfinance_chain = False
         
-    c_symbol = call_con["contractSymbol"]
-    p_symbol = put_con["contractSymbol"]
-    
-    c_mid = (call_con.get("bid", 0.0) + call_con.get("ask", 0.0)) / 2.0 or call_con.get("lastPrice", 0.0)
-    p_mid = (put_con.get("bid", 0.0) + put_con.get("ask", 0.0)) / 2.0 or put_con.get("lastPrice", 0.0)
-    
-    # 5. Define legs based on direction
-    if direction == "long":
-        # Synthetic Long: Buy Call, Sell Put
-        c_action = "buy"
-        c_price_type = "ask" # buy calls at ask
-        p_action = "sell"
-        p_price_type = "bid" # sell puts at bid
+    if not use_yfinance_chain or not call_con or not put_con:
+        # Fallback to Alpaca: build symbols manually and fetch quotes
+        c_symbol = format_osi_symbol(ticker, expiry, "call", strike)
+        p_symbol = format_osi_symbol(ticker, expiry, "put", strike)
         
-        c_limit = sanitize_price(call_con, c_price_type, c_mid)
-        p_limit = sanitize_price(put_con, p_price_type, p_mid)
+        print(f"Fetching quotes from Alpaca for:\n  Call: {c_symbol}\n  Put:  {p_symbol}")
+        c_quote = get_alpaca_option_quote(c_symbol)
+        p_quote = get_alpaca_option_quote(p_symbol)
         
-        legs = [
-            {"name": "Leg 1: Buy Call (Long Call)", "symbol": c_symbol, "side": c_action, "limit_price": c_limit},
-            {"name": "Leg 2: Sell Put (Short Put)", "symbol": p_symbol, "side": p_action, "limit_price": p_limit}
-        ]
-    elif direction == "short":
-        # Synthetic Short: Buy Put, Sell Call
-        p_action = "buy"
-        p_price_type = "ask" # buy puts at ask
-        c_action = "sell"
-        c_price_type = "bid" # sell calls at bid
+        if not c_quote or not p_quote:
+            print("Error: Could not retrieve option quotes from Alpaca. Please verify your Alpaca API Keys.")
+            return False
+            
+        c_mid = c_quote["mid"]
+        p_mid = p_quote["mid"]
         
-        p_limit = sanitize_price(put_con, p_price_type, p_mid)
-        c_limit = sanitize_price(call_con, c_price_type, c_mid)
-        
-        legs = [
-            {"name": "Leg 1: Buy Put (Long Put)", "symbol": p_symbol, "side": p_action, "limit_price": p_limit},
-            {"name": "Leg 2: Sell Call (Short Call)", "symbol": c_symbol, "side": c_action, "limit_price": c_limit}
-        ]
+        if direction == "long":
+            c_limit = c_quote["ask"]
+            p_limit = p_quote["bid"]
+            
+            # Ensure positive prices
+            if c_limit <= 0: c_limit = c_mid or 0.01
+            if p_limit <= 0: p_limit = p_mid or 0.01
+            
+            legs = [
+                {"name": "Leg 1: Buy Call (Long Call)", "symbol": c_symbol, "side": "buy", "limit_price": c_limit},
+                {"name": "Leg 2: Sell Put (Short Put)", "symbol": p_symbol, "side": "sell", "limit_price": p_limit}
+            ]
+        else:
+            p_limit = p_quote["ask"]
+            c_limit = c_quote["bid"]
+            
+            # Ensure positive prices
+            if p_limit <= 0: p_limit = p_mid or 0.01
+            if c_limit <= 0: c_limit = c_mid or 0.01
+            
+            legs = [
+                {"name": "Leg 1: Buy Put (Long Put)", "symbol": p_symbol, "side": "buy", "limit_price": p_limit},
+                {"name": "Leg 2: Sell Call (Short Call)", "symbol": c_symbol, "side": "sell", "limit_price": c_limit}
+            ]
     else:
-        print(f"Error: Unknown direction '{direction}'. Must be 'long' or 'short'.")
-        return False
+        c_symbol = call_con["contractSymbol"]
+        p_symbol = put_con["contractSymbol"]
+        
+        c_mid = (call_con.get("bid", 0.0) + call_con.get("ask", 0.0)) / 2.0 or call_con.get("lastPrice", 0.0)
+        p_mid = (put_con.get("bid", 0.0) + put_con.get("ask", 0.0)) / 2.0 or put_con.get("lastPrice", 0.0)
+        
+        # 5. Define legs based on direction
+        if direction == "long":
+            # Synthetic Long: Buy Call, Sell Put
+            c_action = "buy"
+            c_price_type = "ask" # buy calls at ask
+            p_action = "sell"
+            p_price_type = "bid" # sell puts at bid
+            
+            c_limit = sanitize_price(call_con, c_price_type, c_mid)
+            p_limit = sanitize_price(put_con, p_price_type, p_mid)
+            
+            legs = [
+                {"name": "Leg 1: Buy Call (Long Call)", "symbol": c_symbol, "side": c_action, "limit_price": c_limit},
+                {"name": "Leg 2: Sell Put (Short Put)", "symbol": p_symbol, "side": p_action, "limit_price": p_limit}
+            ]
+        elif direction == "short":
+            # Synthetic Short: Buy Put, Sell Call
+            p_action = "buy"
+            p_price_type = "ask" # buy puts at ask
+            c_action = "sell"
+            c_price_type = "bid" # sell calls at bid
+            
+            p_limit = sanitize_price(put_con, p_price_type, p_mid)
+            c_limit = sanitize_price(call_con, c_price_type, c_mid)
+            legs = [
+                {"name": "Leg 1: Buy Put (Long Put)", "symbol": p_symbol, "side": p_action, "limit_price": p_limit},
+                {"name": "Leg 2: Sell Call (Short Call)", "symbol": c_symbol, "side": c_action, "limit_price": c_limit}
+            ]
         
     # Show structure
     print("\nPositions to be executed:")

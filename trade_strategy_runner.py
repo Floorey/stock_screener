@@ -4,8 +4,8 @@ import yfinance as yf
 from datetime import datetime
 from dotenv import load_dotenv
 
-# Load Alpaca configuration from the stock screener directory
-load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+# Load Alpaca configuration from the stock screener directory and override stale variables
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=True)
 
 API_KEY = os.getenv("ALPACA_API_KEY")
 SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
@@ -16,6 +16,29 @@ headers = {
     "APCA-API-SECRET-KEY": SECRET_KEY,
     "Content-Type": "application/json"
 }
+
+def get_alpaca_option_contracts(underlying: str) -> list[dict]:
+    """Fetches active options contracts for an underlying from Alpaca."""
+    if not API_KEY or not SECRET_KEY:
+        return []
+    url = f"{BASE_URL}/v2/options/contracts"
+    headers_local = {
+        "APCA-API-KEY-ID": API_KEY,
+        "APCA-API-SECRET-KEY": SECRET_KEY,
+        "Content-Type": "application/json"
+    }
+    params = {
+        "underlying_symbol": underlying.upper(),
+        "status": "active",
+        "limit": 1000
+    }
+    try:
+        res = requests.get(url, headers=headers_local, params=params, timeout=5)
+        if res.status_code == 200:
+            return res.json().get("option_contracts", [])
+    except Exception as e:
+        print(f"Error fetching Alpaca options contracts: {e}")
+    return []
 
 def place_order(symbol, qty, side, order_type="market", limit_price=None):
     """Utility to place standard or option order on Alpaca."""
@@ -62,18 +85,56 @@ def execute_synthetic_short_bond(ticker="TLT", expiry=None, strike=None, qty=1):
     
     # Get current price if strike is not provided
     if not strike:
-        info = tk.info
-        current_price = info.get("currentPrice") or info.get("previousClose") or 90.0
+        current_price = None
+        try:
+            info = tk.info
+            current_price = info.get("currentPrice") or info.get("previousClose")
+        except Exception as e:
+            print(f"yfinance price fetch failed: {e}. Trying Alpaca Data API...")
+            
+        if current_price is None:
+            # Fallback to Alpaca Data API
+            try:
+                url = f"https://data.alpaca.markets/v2/stocks/{ticker}/trades/latest"
+                res = requests.get(url, headers=headers, timeout=5)
+                if res.status_code == 200:
+                    trade_data = res.json()
+                    current_price = trade_data.get("trade", {}).get("p")
+            except Exception as e:
+                print(f"Alpaca Data API price fetch failed: {e}")
+                
+        if current_price is None:
+            current_price = 90.0  # Safe default if all fail
+            print(f"Warning: Could not fetch price. Defaulting to ${current_price:.2f}")
+            
         strike = float(round(current_price))
         print(f"Detected current price for {ticker}: ${current_price:.2f}. Suggesting Strike: ${strike:.2f}")
         
     # Get closest expiration date (approx 30 days) if not provided
     if not expiry:
-        dates = list(tk.options)
+        dates = []
+        try:
+            dates = list(tk.options)
+        except Exception as e:
+            print(f"yfinance options list fetch failed: {e}. Trying Alpaca...")
+            
+        if not dates:
+            contracts = get_alpaca_option_contracts(ticker)
+            if contracts:
+                dates = sorted(list(set(c.get("expiration_date") for c in contracts if c.get("expiration_date"))))
+                
         if not dates:
             print(f"Error: No options chain available for {ticker}!")
             return False
-        expiry = dates[0] # Take first available for test, or user can specify
+            
+        # Target about 30 days
+        expiry = dates[0]
+        for d in dates:
+            dt = datetime.strptime(d, "%Y-%m-%d")
+            days = (dt - datetime.now()).days
+            if 25 <= days <= 45:
+                expiry = d
+                break
         print(f"Suggesting Expiration Date: {expiry}")
         
     # Format Option Symbols
