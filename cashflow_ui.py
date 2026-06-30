@@ -143,20 +143,44 @@ def render_cashflow_tab(get_single_ticker_data, calculate_scores):
     # ----------------------------------------------------
     with c_tab1:
         # Calculate statistics
-        total_income = ledger_df["Amount"].sum()
-        options_premium = ledger_df[ledger_df["Type"] == "Option Premium"]["Amount"].sum()
-        dividends = ledger_df[ledger_df["Type"] == "Dividend"]["Amount"].sum()
-        interests = ledger_df[ledger_df["Type"] == "Interest"]["Amount"].sum()
+        total_income = ledger_df["Amount"].sum() if not ledger_df.empty else 0.0
+        options_premium = ledger_df[ledger_df["Type"] == "Option Premium"]["Amount"].sum() if not ledger_df.empty else 0.0
+        dividends = ledger_df[ledger_df["Type"] == "Dividend"]["Amount"].sum() if not ledger_df.empty else 0.0
+        interests = ledger_df[ledger_df["Type"] == "Interest"]["Amount"].sum() if not ledger_df.empty else 0.0
         
         # Monthly projections
         try:
             # Group by year-month to find average monthly cashflow
             ledger_df_temp = ledger_df.copy()
-            ledger_df_temp["Date"] = pd.to_datetime(ledger_df_temp["Date"])
-            monthly_totals = ledger_df_temp.groupby(ledger_df_temp["Date"].dt.to_period("M"))["Amount"].sum()
-            avg_monthly_cashflow = monthly_totals.mean() if not monthly_totals.empty else total_income
+            ledger_df_temp["Date"] = pd.to_datetime(ledger_df_temp["Date"], errors='coerce')
+            ledger_df_temp = ledger_df_temp.dropna(subset=["Date"])
+            if not ledger_df_temp.empty:
+                monthly_totals = ledger_df_temp.groupby(ledger_df_temp["Date"].dt.to_period("M"))["Amount"].sum()
+                avg_monthly_cashflow = monthly_totals.mean() if not monthly_totals.empty else total_income
+            else:
+                avg_monthly_cashflow = total_income
         except Exception:
             avg_monthly_cashflow = total_income
+            
+        # Format helpers for KPI metrics
+        def format_cf_metric(val: float) -> str:
+            if val >= 0:
+                return f"+${val:,.2f}"
+            else:
+                return f"-${abs(val):,.2f}"
+
+        total_income_color = "#10b981" if total_income >= 0 else "#ef4444"
+        options_color = "#3b82f6" if options_premium >= 0 else "#ef4444"
+        dividends_color = "#8b5cf6" if dividends >= 0 else "#ef4444"
+        avg_monthly_color = "#f59e0b" if avg_monthly_cashflow >= 0 else "#ef4444"
+
+        total_income_str = format_cf_metric(total_income)
+        options_str = format_cf_metric(options_premium)
+        dividends_str = format_cf_metric(dividends)
+        avg_monthly_str = format_cf_metric(avg_monthly_cashflow)
+
+        interests_str = f"${interests:,.2f}" if interests >= 0 else f"-${abs(interests):,.2f}"
+        options_pct = ((options_premium / abs(total_income) * 100) if total_income != 0 else 0.0)
             
         # KPI Metric layout
         kpi_col1, kpi_col2, kpi_col3, kpi_col4 = st.columns(4)
@@ -164,7 +188,7 @@ def render_cashflow_tab(get_single_ticker_data, calculate_scores):
             st.markdown(f"""
             <div class="metric-card" style="text-align: center;">
                 <span style="font-size: 0.9rem; color: #9ca3af;">Gesamt-Cashflow (Netto)</span>
-                <h2 style="margin: 0.5rem 0; color: #10b981;">+${total_income:,.2f}</h2>
+                <h2 style="margin: 0.5rem 0; color: {total_income_color};">{total_income_str}</h2>
                 <span style="font-size: 0.8rem; color: #9ca3af;">Kumulierter Ertrag</span>
             </div>
             """, unsafe_allow_html=True)
@@ -173,8 +197,8 @@ def render_cashflow_tab(get_single_ticker_data, calculate_scores):
             st.markdown(f"""
             <div class="metric-card" style="text-align: center;">
                 <span style="font-size: 0.9rem; color: #9ca3af;">Options-Prämien</span>
-                <h2 style="margin: 0.5rem 0; color: #3b82f6;">+${options_premium:,.2f}</h2>
-                <span style="font-size: 0.8rem; color: #9ca3af;">{((options_premium/total_income*100) if total_income > 0 else 0.0):.1f}% vom Gesamt-Cashflow</span>
+                <h2 style="margin: 0.5rem 0; color: {options_color};">{options_str}</h2>
+                <span style="font-size: 0.8rem; color: #9ca3af;">{options_pct:.1f}% vom Gesamt-Cashflow (Absolut)</span>
             </div>
             """, unsafe_allow_html=True)
             
@@ -182,8 +206,8 @@ def render_cashflow_tab(get_single_ticker_data, calculate_scores):
             st.markdown(f"""
             <div class="metric-card" style="text-align: center;">
                 <span style="font-size: 0.9rem; color: #9ca3af;">Dividenden-Erträge</span>
-                <h2 style="margin: 0.5rem 0; color: #8b5cf6;">+${dividends:,.2f}</h2>
-                <span style="font-size: 0.8rem; color: #9ca3af;">Zins-Erträge: ${interests:,.2f}</span>
+                <h2 style="margin: 0.5rem 0; color: {dividends_color};">{dividends_str}</h2>
+                <span style="font-size: 0.8rem; color: #9ca3af;">Zins-Erträge: {interests_str}</span>
             </div>
             """, unsafe_allow_html=True)
             
@@ -191,7 +215,7 @@ def render_cashflow_tab(get_single_ticker_data, calculate_scores):
             st.markdown(f"""
             <div class="metric-card" style="text-align: center;">
                 <span style="font-size: 0.9rem; color: #9ca3af;">Ø Monatlicher Cashflow</span>
-                <h2 style="margin: 0.5rem 0; color: #f59e0b;">+${avg_monthly_cashflow:,.2f}</h2>
+                <h2 style="margin: 0.5rem 0; color: {avg_monthly_color};">{avg_monthly_str}</h2>
                 <span style="font-size: 0.8rem; color: #9ca3af;">Basiert auf Buchungen</span>
             </div>
             """, unsafe_allow_html=True)
@@ -326,7 +350,7 @@ def render_cashflow_tab(get_single_ticker_data, calculate_scores):
             else:
                 # Format amounts
                 display_ledger = filtered_ledger.copy()
-                display_ledger["Amount"] = display_ledger["Amount"].apply(lambda x: f"${x:,.2f}")
+                display_ledger["Amount"] = display_ledger["Amount"].apply(lambda x: f"+${x:,.2f}" if x >= 0 else f"-${abs(x):,.2f}")
                 
                 st.dataframe(
                     display_ledger[["Date", "Ticker", "Type", "Description", "Amount", "Source", "ID"]],
@@ -369,7 +393,7 @@ def render_cashflow_tab(get_single_ticker_data, calculate_scores):
                     tx_to_del = st.selectbox(
                         "Wählen Sie die zu löschende Buchung:",
                         options=ledger_df["ID"].tolist(),
-                        format_func=lambda x: f"{ledger_df[ledger_df['ID']==x]['Date'].values[0]} | {ledger_df[ledger_df['ID']==x]['Ticker'].values[0]} | {ledger_df[ledger_df['ID']==x]['Type'].values[0]} (${ledger_df[ledger_df['ID']==x]['Amount'].values[0]:.2f})"
+                        format_func=lambda x: f"{ledger_df[ledger_df['ID']==x]['Date'].values[0]} | {ledger_df[ledger_df['ID']==x]['Ticker'].values[0]} | {ledger_df[ledger_df['ID']==x]['Type'].values[0]} (" + (f"+${ledger_df[ledger_df['ID']==x]['Amount'].values[0]:,.2f}" if ledger_df[ledger_df['ID']==x]['Amount'].values[0] >= 0 else f"-${abs(ledger_df[ledger_df['ID']==x]['Amount'].values[0]):,.2f}") + ")"
                     )
                     if st.button("❌ Ausgewählte Buchung löschen", use_container_width=True):
                         delete_transaction(tx_to_del)
