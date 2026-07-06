@@ -242,7 +242,7 @@ tab1, tab_wl, tab_opt, tab2, tab_trade, tab_cash, tab_strat, tab_risk, tab3 = st
     "📈 Einzelwert-Analyse", 
     "💼 Alpaca Trading",
     "💸 Cashflow-Management",
-    "⚡ Strategie-Desk (Option A)",
+    "⚡ Strategie-Desk (Option A & mehr)",
     "🛡️ Risk-Manager & Stress-Test",
     "📄 PDF Finanzbericht Analyzer"
 ])
@@ -1550,7 +1550,8 @@ with tab_strat:
             "Covered Call / Buy-Write (Income & Upside)",
             "Covered Call mit bestehenden Aktien (Stillhalter)",
             "Cash-Secured Put (Günstiger Einstieg)",
-            "Bear Put Spread (Definierter Risiko-Short)"
+            "Bear Put Spread (Definierter Risiko-Short)",
+            "Synthetischer Short (Long Put + Short Call)"
         ]
     )
     
@@ -1684,7 +1685,7 @@ with tab_strat:
 
                     legs_data = []
                     
-                    if "Option A" in strategy_choice:
+                    if "Option A" in strategy_choice or "Synthetischer Short" in strategy_choice:
                         # Synthetic Short: Long Put + Short Call
                         legs_data = [
                             {
@@ -1897,7 +1898,7 @@ with tab_strat:
                     with c_flow_col1:
                         st.metric("Netto Cashflow (Einstieg)", f"${abs(total_cash_flow):,.2f}", delta=net_type, delta_color="normal" if total_cash_flow >= 0 else "inverse")
                     with c_flow_col2:
-                        if "Option A" in strategy_choice:
+                        if "Option A" in strategy_choice or "Synthetischer Short" in strategy_choice:
                             st.metric("Gesamt-Delta", "-1.00", help="100% Short-Replikation des Underlyings.")
                         elif "Covered Call" in strategy_choice:
                             st.metric("Gesamt-Delta", "ca. +0.75", help="Aktie (+1.00) minus Call (ca. -0.25)")
@@ -1906,7 +1907,7 @@ with tab_strat:
                         elif "Bear Put Spread" in strategy_choice:
                             st.metric("Gesamt-Delta", "ca. -0.30", help="Differenz der Deltas der Puts.")
                     with c_flow_col3:
-                        if "Option A" in strategy_choice:
+                        if "Option A" in strategy_choice or "Synthetischer Short" in strategy_choice:
                             st.metric("Maximales Risiko", "Unbegrenzt", help="Ungedeckelter Call-Short birgt theoretisch unbegrenztes Risiko nach oben. Stop-Loss von 5% über dem Strike einrichten!")
                         elif "Covered Call" in strategy_choice:
                             st.metric("Maximales Risiko", f"${underlying_price * 100 * cnt:,.2f}", help="Maximaler Verlust, falls die Aktie auf 0 fällt.")
@@ -1924,6 +1925,13 @@ with tab_strat:
                         * **These:** Basierend auf dem Research-Memo `Blackgate_Macro_Memo_Option_A.pdf` zeigen hartnäckige Inflation und steigende US-Staatsverschuldung Aufwärtsdruck auf die Anleiherenditen. Da Anleihekurse mathematisch fallen, wenn die Zinsen steigen, ist der Short-Bond die direkte Wette.
                         * **Mechanik:** Der Kauf des ATM Puts ({p_symbol}) sichert den Kursgewinn bei fallendem Preis. Der zeitgleiche Verkauf des ATM Calls ({c_symbol}) finanziert den Put vollständig (Netto-Einstiegskosten liegen nahe $0.00). 1:1 Partizipation an fallenden Kursen ohne tägliche Borrow-Gebühren (Leihgebühren) oder Short Squeeze Risiken des physischen Leerverkaufs.
                         * **Absicherung (Stop-Loss):** Falls TLT/IEF um mehr als 5% über den Strike-Kurs (${k_val:.2f}) steigt, sollte die Position manuell geschlossen werden, da der ungedeckte Short Call ein unbegrenztes Risiko darstellt.
+                        """)
+                    elif "Synthetischer Short" in strategy_choice:
+                        st.markdown(f"""
+                        **Synthetischer Short (Long Put + Short Call)**
+                        * **These:** Erwartung fallender Kurse des Underlyings bei extrem hoher Kapitaleffizienz.
+                        * **Mechanik:** Der Kauf des ATM Puts ({p_symbol}) sichert den Kursgewinn bei fallendem Preis. Der zeitgleiche Verkauf des ATM Calls ({c_symbol}) finanziert den Put vollständig (Netto-Einstiegskosten liegen nahe $0.00). 1:1 Partizipation an fallenden Kursen ohne tägliche Borrow-Gebühren (Leihgebühren) oder Short Squeeze Risiken des physischen Leerverkaufs.
+                        * **Absicherung (Stop-Loss):** Falls {strat_ticker} um mehr als 5% über den Strike-Kurs (${k_val:.2f}) steigt, sollte die Position manuell geschlossen werden, da der ungedeckte Short Call ein unbegrenztes Risiko darstellt.
                         """)
                     elif "Covered Call" in strategy_choice:
                         if "bestehenden Aktien" in strategy_choice:
@@ -1984,8 +1992,8 @@ with tab_strat:
                                 # 100% collateral for Short Put
                                 strike_val = p_con['strike']
                                 required_bp = strike_val * 100.0 * cnt
-                            elif "Option A" in strategy_choice:
-                                # Option A is a Synthetic Short: Long Put + Short Call
+                            elif "Option A" in strategy_choice or "Synthetischer Short" in strategy_choice:
+                                # Option A / Synthetic Short is a Synthetic Short: Long Put + Short Call
                                 # Naked Call margin is roughly 20% of strike * 100 * contracts (Alpaca requirement)
                                 strike_val = c_con['strike']
                                 required_bp = (strike_val * 100.0 * cnt) * 0.20
