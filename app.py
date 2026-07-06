@@ -21,6 +21,7 @@ from macro_fetcher import fetch_macro_futures, search_polymarket_markets, fetch_
 from report_generator import generate_pdf_report
 from options_ui import render_options_tab
 from cashflow_ui import render_cashflow_tab
+from performance_ui import render_performance_tab
 from risk_manager import (
     fetch_portfolio_positions,
     calculate_portfolio_var,
@@ -235,10 +236,11 @@ if "macro_futures_df" in st.session_state and not st.session_state["macro_future
     )
 
 # Initialize Tabs
-tab1, tab_wl, tab_opt, tab2, tab_trade, tab_cash, tab_strat, tab_risk, tab3 = st.tabs([
+tab1, tab_wl, tab_opt, tab_perf, tab2, tab_trade, tab_cash, tab_strat, tab_risk, tab3 = st.tabs([
     "🎯 Screener Dashboard", 
     "⭐ Watchlist Manager", 
     "🎫 Options-Screener",
+    "🦇 Arkham-Performance",
     "📈 Einzelwert-Analyse", 
     "💼 Alpaca Trading",
     "💸 Cashflow-Management",
@@ -580,6 +582,13 @@ with tab_wl:
 # ----------------------------------------------------
 with tab_opt:
     render_options_tab(get_single_ticker_data, calculate_scores)
+
+
+# ----------------------------------------------------
+# TAB PERF: ARKHAM PERFORMANCE
+# ----------------------------------------------------
+with tab_perf:
+    render_performance_tab()
 
 
 # ----------------------------------------------------
