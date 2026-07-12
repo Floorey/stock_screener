@@ -168,14 +168,6 @@ class StatisticalArbitrageLab:
         # 5. Cointegration (Engle-Granger Two-Step Test via statsmodels)
         coint_p = None
         statsmodels_available = False
-        try:
-            from statsmodels.tsa.stattools import coint
-            # coint returns (coint_t, pvalue, crit_value)
-            _, coint_p, _ = coint(df["Price_A"], df["Price_B"])
-            coint_p = float(coint_p)
-            statsmodels_available = True
-        except ImportError:
-            pass
             
         # 6. Calculate Suitability Score (0 - 100)
         score = 0

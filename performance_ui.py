@@ -818,11 +818,9 @@ def render_performance_tab():
         st.markdown("#### 📈 Kumulative Performance-Kurve")
         
         # We can construct a matplotlib figure for visual excellence and comic vibes
-        plt.figure(figsize=(10, 4.5))
+        fig, ax = plt.subplots(figsize=(10, 4.5))
         plt.style.use('dark_background')
-        fig = plt.gcf()
         fig.patch.set_facecolor('#0d0f12')
-        ax = plt.gca()
         ax.set_facecolor('#1a1a24')
         
         colors_map = {
@@ -840,18 +838,18 @@ def render_performance_tab():
             alpha = 1.0 if col == "Portfolio" else 0.7
             
             rebased = (df_all[col] / df_all[col].iloc[0]) * 100
-            plt.plot(df_all.index, rebased, label=lbl, color=color, linewidth=lw, linestyle=ls, alpha=alpha)
+            ax.plot(df_all.index, rebased, label=lbl, color=color, linewidth=lw, linestyle=ls, alpha=alpha)
             
-        plt.title("Kumulative Performance vs Benchmarks (Start = 100)", fontsize=12, color="#ffea00", weight="bold")
-        plt.grid(True, color="#2f3542", linestyle=":", alpha=0.5)
-        plt.legend(loc="upper left", frameon=True, facecolor="#0d0f12", edgecolor="#ff0055")
-        plt.tick_params(colors='#d1d5db', labelsize=10)
+        ax.set_title("Kumulative Performance vs Benchmarks (Start = 100)", fontsize=12, color="#ffea00", weight="bold")
+        ax.grid(True, color="#2f3542", linestyle=":", alpha=0.5)
+        ax.legend(loc="upper left", frameon=True, facecolor="#0d0f12", edgecolor="#ff0055")
+        ax.tick_params(colors='#d1d5db', labelsize=10)
         
-        plt.xlabel("Datum", color='#9ca3af', fontsize=10)
-        plt.ylabel("Verlauf (%)", color='#9ca3af', fontsize=10)
+        ax.set_xlabel("Datum", color='#9ca3af', fontsize=10)
+        ax.set_ylabel("Verlauf (%)", color='#9ca3af', fontsize=10)
         plt.tight_layout()
-        st.pyplot(plt)
-        plt.close()
+        st.pyplot(fig)
+        plt.close(fig)
         
         # Display Table Comparison
         st.markdown("#### 📋 Performance-Matrix")
