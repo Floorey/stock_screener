@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import yfinance as yf
 import os
 import time
 from datetime import datetime
@@ -95,7 +96,6 @@ def render_algo_lab_tab():
                 # Retrieve price proxy
                 price = 100.0
                 try:
-                    import yfinance as yf
                     tk = yf.Ticker(exec_ticker)
                     hist = tk.history(period="1d")
                     if not hist.empty:
@@ -216,6 +216,12 @@ def render_algo_lab_tab():
         with pair_col3:
             pairs_period = st.selectbox("Historischer Zeitraum", ["30d", "60d", "90d", "180d", "1y"], index=2)
             
+        # Initialize session state for pairs
+        if "pairs_df" not in st.session_state:
+            st.session_state["pairs_df"] = None
+            st.session_state["pairs_ticker_a"] = ""
+            st.session_state["pairs_ticker_b"] = ""
+            
         run_pairs = st.button("🔍 Spread-Analyse durchführen", key="run_pairs_btn")
         
         if run_pairs:
@@ -226,101 +232,113 @@ def render_algo_lab_tab():
                         st.error("Keine ausreichenden Daten gefunden.")
                     else:
                         df_pair = StatisticalArbitrageLab.calculate_pairs_metrics(df_pair, rolling_window)
-                        
-                        # Correlation
-                        corr = df_pair["Price_A"].corr(df_pair["Price_B"])
-                        current_a = df_pair["Price_A"].iloc[-1]
-                        current_b = df_pair["Price_B"].iloc[-1]
-                        current_z = df_pair["Z_Score"].iloc[-1]
-                        current_hr = df_pair["Hedge_Ratio"].iloc[-1]
-                        
-                        st.markdown("### 📊 Paar-Statistiken")
-                        stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
-                        with stat_col1:
-                            st.metric(f"Preis {ticker_a}", f"${current_a:.2f}")
-                        with stat_col2:
-                            st.metric(f"Preis {ticker_b}", f"${current_b:.2f}")
-                        with stat_col3:
-                            st.metric("Historische Korrelation", f"{corr:.2f}", delta="Gleichlauf" if corr > 0.7 else "Schwach")
-                        with stat_col4:
-                            # Color coding z-score
-                            if current_z > entry_threshold:
-                                rec_text = "SHORT SPREAD (Sell A / Buy B)"
-                                rec_color = "red"
-                            elif current_z < -entry_threshold:
-                                rec_text = "BUY SPREAD (Buy A / Sell B)"
-                                rec_color = "green"
-                            else:
-                                rec_text = "KEIN SIGNAL (Mean-Neutral)"
-                                rec_color = "gray"
-                            
-                            st.metric("Aktueller Z-Score", f"{current_z:.2f}", delta=rec_text, delta_color="normal" if "BUY" in rec_text else ("inverse" if "SHORT" in rec_text else "off"))
-                        
-                        # Plot Spread & Z-Score
-                        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
-                        fig.patch.set_facecolor('#0f172a')
-                        
-                        for ax in [ax1, ax2]:
-                            ax.set_facecolor('#1e293b')
-                            ax.tick_params(colors='#94a3b8')
-                            ax.xaxis.label.set_color('#94a3b8')
-                            ax.yaxis.label.set_color('#94a3b8')
-                            ax.title.set_color('#f8fafc')
-                            ax.grid(True, color='#334155', linestyle=':')
-                            
-                        # Chart 1: Spread
-                        ax1.plot(df_pair.index, df_pair["Spread"], label="Spread (A - Ratio*B)", color="#38bdf8", linewidth=2)
-                        ax1.plot(df_pair.index, df_pair["Spread_Mean"], label="Mittelwert", color="#f43f5e", linestyle="--")
-                        ax1.set_title(f"Historischer Spread zwischen {ticker_a} und {ticker_b}")
-                        ax1.legend(facecolor='#1e293b', labelcolor='#f8fafc')
-                        
-                        # Chart 2: Z-Score
-                        ax2.plot(df_pair.index, df_pair["Z_Score"], label="Z-Score", color="#a855f7", linewidth=2)
-                        ax2.axhline(entry_threshold, color="#ef4444", linestyle=":", label="Short Threshold")
-                        ax2.axhline(-entry_threshold, color="#22c55e", linestyle=":", label="Buy Threshold")
-                        ax2.axhline(0, color="#94a3b8", linestyle="-.")
-                        ax2.set_title("Z-Score Abweichungsindikator")
-                        ax2.legend(facecolor='#1e293b', labelcolor='#f8fafc')
-                        
-                        st.pyplot(fig)
-                        
-                        # Execution section
-                        st.markdown("### ⚡ Live Arbitrage Order-Cockpit")
-                        st.write(f"Empfohlener Hedge-Faktor: **1 Share von {ticker_a}** erfordert **{current_hr:.3f} Shares von {ticker_b}** für ein neutrales Spread-Exposure.")
-                        
-                        mult = st.number_input("Multiplikator (Menge für Asset A)", min_value=1, value=10, step=1)
-                        qty_a = mult
-                        qty_b = int(np.round(mult * current_hr))
-                        
-                        exec_col1, exec_col2 = st.columns(2)
-                        with exec_col1:
-                            st.write(f"🛒 **Kauf-Leg:** {qty_a} Shares von {ticker_a} (Wert: ${qty_a * current_a:,.2f})")
-                        with exec_col2:
-                            st.write(f"📉 **Short-Leg:** {qty_b} Shares von {ticker_b} (Wert: ${qty_b * current_b:,.2f})")
-                            
-                        if not is_alpaca_configured():
-                            st.warning("Alpaca ist nicht konfiguriert. Arbitrage-Ausführung deaktiviert.")
-                        else:
-                            st.success("🟢 Alpaca-Konto verbunden. Trades können platziert werden.")
-                            
-                            if current_z > entry_threshold:
-                                if st.button(f"🚀 Short-Spread Trade platzieren (Short A / Long B)", type="primary"):
-                                    with st.spinner("Sende Arbitrage-Legs..."):
-                                        # Sell A, Buy B
-                                        res_a = place_order(ticker_a, qty_a, "sell", "market")
-                                        res_b = place_order(ticker_b, qty_b, "buy", "market")
-                                        st.success(f"Orders platziert! Ticker {ticker_a} (Short): {res_a.get('status')} | Ticker {ticker_b} (Long): {res_b.get('status')}")
-                            elif current_z < -entry_threshold:
-                                if st.button(f"🚀 Buy-Spread Trade platzieren (Long A / Short B)", type="primary"):
-                                    with st.spinner("Sende Arbitrage-Legs..."):
-                                        # Buy A, Sell B
-                                        res_a = place_order(ticker_a, qty_a, "buy", "market")
-                                        res_b = place_order(ticker_b, qty_b, "sell", "market")
-                                        st.success(f"Orders platziert! Ticker {ticker_a} (Long): {res_a.get('status')} | Ticker {ticker_b} (Short): {res_b.get('status')}")
-                            else:
-                                st.info("Der Z-Score liegt aktuell im neutralen Bereich. Kein unmittelbares Handels-Setup.")
+                        st.session_state["pairs_df"] = df_pair
+                        st.session_state["pairs_ticker_a"] = ticker_a
+                        st.session_state["pairs_ticker_b"] = ticker_b
+                        st.session_state["pairs_corr"] = df_pair["Price_A"].corr(df_pair["Price_B"])
+                        st.session_state["pairs_current_a"] = df_pair["Price_A"].iloc[-1]
+                        st.session_state["pairs_current_b"] = df_pair["Price_B"].iloc[-1]
+                        st.session_state["pairs_current_z"] = df_pair["Z_Score"].iloc[-1]
+                        st.session_state["pairs_current_hr"] = df_pair["Hedge_Ratio"].iloc[-1]
                 except Exception as e:
                     st.error(f"Fehler bei der Paaranalyse: {e}")
+                    st.session_state["pairs_df"] = None
+                    
+        # Render if analyzed results exist and match current input tickers
+        if st.session_state["pairs_df"] is not None and st.session_state["pairs_ticker_a"] == ticker_a and st.session_state["pairs_ticker_b"] == ticker_b:
+            df_pair = st.session_state["pairs_df"]
+            corr = st.session_state["pairs_corr"]
+            current_a = st.session_state["pairs_current_a"]
+            current_b = st.session_state["pairs_current_b"]
+            current_z = st.session_state["pairs_current_z"]
+            current_hr = st.session_state["pairs_current_hr"]
+            
+            st.markdown("### 📊 Paar-Statistiken")
+            stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
+            with stat_col1:
+                st.metric(f"Preis {ticker_a}", f"${current_a:.2f}")
+            with stat_col2:
+                st.metric(f"Preis {ticker_b}", f"${current_b:.2f}")
+            with stat_col3:
+                st.metric("Historische Korrelation", f"{corr:.2f}", delta="Gleichlauf" if corr > 0.7 else "Schwach")
+            with stat_col4:
+                # Color coding z-score
+                if current_z > entry_threshold:
+                    rec_text = "SHORT SPREAD (Sell A / Buy B)"
+                    rec_color = "red"
+                elif current_z < -entry_threshold:
+                    rec_text = "BUY SPREAD (Buy A / Sell B)"
+                    rec_color = "green"
+                else:
+                    rec_text = "KEIN SIGNAL (Mean-Neutral)"
+                    rec_color = "gray"
+                
+                st.metric("Aktueller Z-Score", f"{current_z:.2f}", delta=rec_text, delta_color="normal" if "BUY" in rec_text else ("inverse" if "SHORT" in rec_text else "off"))
+            
+            # Plot Spread & Z-Score
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
+            fig.patch.set_facecolor('#0f172a')
+            
+            for ax in [ax1, ax2]:
+                ax.set_facecolor('#1e293b')
+                ax.tick_params(colors='#94a3b8')
+                ax.xaxis.label.set_color('#94a3b8')
+                ax.yaxis.label.set_color('#94a3b8')
+                ax.title.set_color('#f8fafc')
+                ax.grid(True, color='#334155', linestyle=':')
+                
+            # Chart 1: Spread
+            ax1.plot(df_pair.index, df_pair["Spread"], label="Spread (A - Ratio*B)", color="#38bdf8", linewidth=2)
+            ax1.plot(df_pair.index, df_pair["Spread_Mean"], label="Mittelwert", color="#f43f5e", linestyle="--")
+            ax1.set_title(f"Historischer Spread zwischen {ticker_a} und {ticker_b}")
+            ax1.legend(facecolor='#1e293b', labelcolor='#f8fafc')
+            
+            # Chart 2: Z-Score
+            ax2.plot(df_pair.index, df_pair["Z_Score"], label="Z-Score", color="#a855f7", linewidth=2)
+            ax2.axhline(entry_threshold, color="#ef4444", linestyle=":", label="Short Threshold")
+            ax2.axhline(-entry_threshold, color="#22c55e", linestyle=":", label="Buy Threshold")
+            ax2.axhline(0, color="#94a3b8", linestyle="-.")
+            ax2.set_title("Z-Score Abweichungsindikator")
+            ax2.legend(facecolor='#1e293b', labelcolor='#f8fafc')
+            
+            st.pyplot(fig)
+            
+            # Execution section
+            st.markdown("### ⚡ Live Arbitrage Order-Cockpit")
+            st.write(f"Empfohlener Hedge-Faktor: **1 Share von {ticker_a}** erfordert **{current_hr:.3f} Shares von {ticker_b}** für ein neutrales Spread-Exposure.")
+            
+            mult = st.number_input("Multiplikator (Menge für Asset A)", min_value=1, value=10, step=1)
+            qty_a = mult
+            qty_b = int(np.round(mult * current_hr))
+            
+            exec_col1, exec_col2 = st.columns(2)
+            with exec_col1:
+                st.write(f"🛒 **Kauf-Leg:** {qty_a} Shares von {ticker_a} (Wert: ${qty_a * current_a:,.2f})")
+            with exec_col2:
+                st.write(f"📉 **Short-Leg:** {qty_b} Shares von {ticker_b} (Wert: ${qty_b * current_b:,.2f})")
+                
+            if not is_alpaca_configured():
+                st.warning("Alpaca ist nicht konfiguriert. Arbitrage-Ausführung deaktiviert.")
+            else:
+                st.success("🟢 Alpaca-Konto verbunden. Trades können platziert werden.")
+                
+                if current_z > entry_threshold:
+                    if st.button(f"🚀 Short-Spread Trade platzieren (Short A / Long B)", type="primary"):
+                        with st.spinner("Sende Arbitrage-Legs..."):
+                            # Sell A, Buy B
+                            res_a = place_order(ticker_a, qty_a, "sell", "market")
+                            res_b = place_order(ticker_b, qty_b, "buy", "market")
+                            st.success(f"Orders platziert! Ticker {ticker_a} (Short): {res_a.get('status')} | Ticker {ticker_b} (Long): {res_b.get('status')}")
+                elif current_z < -entry_threshold:
+                    if st.button(f"🚀 Buy-Spread Trade platzieren (Long A / Short B)", type="primary"):
+                        with st.spinner("Sende Arbitrage-Legs..."):
+                            # Buy A, Sell B
+                            res_a = place_order(ticker_a, qty_a, "buy", "market")
+                            res_b = place_order(ticker_b, qty_b, "sell", "market")
+                            st.success(f"Orders platziert! Ticker {ticker_a} (Long): {res_a.get('status')} | Ticker {ticker_b} (Short): {res_b.get('status')}")
+                else:
+                    st.info("Der Z-Score liegt aktuell im neutralen Bereich. Kein unmittelbares Handels-Setup.")
+
 
     # -------------------------------------------------------------------------
     # SUB-TAB 3: CONVERTIBLE ARBITRAGE & DELTA HEDGING
