@@ -1401,6 +1401,10 @@ with tab_trade:
                             else:
                                 st.error(f"Fehler beim Übermitteln der Order: {res.get('message')}")
 
+            # Render Pairs Tracker
+            from pairs_tracker import render_pairs_tracker_widget
+            render_pairs_tracker_widget(positions)
+
     # ----------------------------------------------------
     # SINGLE SCRIPTS RUNNER SECTION
     # ----------------------------------------------------

@@ -378,6 +378,12 @@ def render_algo_lab_tab():
                             res_a = place_order(ticker_a, qty_a, "sell", "market")
                             res_b = place_order(ticker_b, qty_b, "buy", "market")
                             st.success(f"Orders platziert! Ticker {ticker_a} (Short): {res_a.get('status')} | Ticker {ticker_b} (Long): {res_b.get('status')}")
+                            
+                            # Register active pair
+                            if res_a.get("status") == "success" or res_b.get("status") == "success":
+                                from pairs_tracker import register_pair
+                                register_pair(ticker_a, ticker_b, -qty_a, qty_b, current_hr, current_z, rolling_window, pairs_period)
+                                st.info("Arbitrage-Paar erfolgreich im Tracker registriert.")
                 elif current_z < -entry_threshold:
                     if st.button(f"🚀 Buy-Spread Trade platzieren (Long A / Short B)", type="primary"):
                         with st.spinner("Sende Arbitrage-Legs..."):
@@ -385,6 +391,12 @@ def render_algo_lab_tab():
                             res_a = place_order(ticker_a, qty_a, "buy", "market")
                             res_b = place_order(ticker_b, qty_b, "sell", "market")
                             st.success(f"Orders platziert! Ticker {ticker_a} (Long): {res_a.get('status')} | Ticker {ticker_b} (Short): {res_b.get('status')}")
+                            
+                            # Register active pair
+                            if res_a.get("status") == "success" or res_b.get("status") == "success":
+                                from pairs_tracker import register_pair
+                                register_pair(ticker_a, ticker_b, qty_a, -qty_b, current_hr, current_z, rolling_window, pairs_period)
+                                st.info("Arbitrage-Paar erfolgreich im Tracker registriert.")
                 else:
                     st.info("Der Z-Score liegt aktuell im neutralen Bereich. Kein unmittelbares Handels-Setup.")
 
