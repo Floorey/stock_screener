@@ -1,7 +1,16 @@
 import numpy as np
 import pandas as pd
 import yfinance as yf
-from scipy.stats import norm
+import math
+
+class norm:
+    @staticmethod
+    def cdf(x):
+        return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+        
+    @staticmethod
+    def pdf(x):
+        return math.exp(-0.5 * x**2) / math.sqrt(2.0 * math.pi)
 from datetime import datetime, timedelta
 
 def calculate_black_scholes_delta(S, K, T, r, sigma, option_type="call"):
