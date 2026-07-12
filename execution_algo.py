@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 # Load Alpaca configuration
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=True)
 
-from alpaca_trader import place_order, get_alpaca_option_quote
+from alpaca_trader import place_order
 
 class ExecutionAlgoManager:
     def __init__(self):
