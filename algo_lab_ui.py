@@ -206,6 +206,55 @@ def render_algo_lab_tab():
         st.subheader("Statistical Arbitrage Lab (Pairs Trading)")
         st.write("Identifizieren Sie überkaufte/überverkaufte Spreads korrelierter Asset-Paare und handeln Sie deren Mittelwertrückkehr (Mean Reversion).")
         
+        # Pair Suitability Test Expander
+        with st.expander("🔍 Paar-Eignungsrechner (StatArb Suitability Test)", expanded=False):
+            st.markdown("### Prüfen Sie, ob ein Paar für Statistical Arbitrage geeignet ist")
+            st.write("Dieser Rechner analysiert Korrelation, Halbwertszeit der Mean Reversion und Cointegration über das letzte Jahr.")
+            
+            c_col1, c_col2, c_col3 = st.columns(3)
+            with c_col1:
+                test_ticker_a = st.text_input("Test Asset A", value="KO", key="test_t_a").upper().strip()
+            with c_col2:
+                test_ticker_b = st.text_input("Test Asset B", value="PEP", key="test_t_b").upper().strip()
+            with c_col3:
+                test_period = st.selectbox("Historischer Test-Zeitraum", ["90d", "180d", "1y", "2y"], index=2, key="test_per")
+                
+            if st.button("⚖️ Eignung testen", key="test_suitability_btn"):
+                with st.spinner("Analysiere mathematische Paareigenschaften..."):
+                    res = StatisticalArbitrageLab.calculate_pair_suitability(test_ticker_a, test_ticker_b, test_period)
+                    if res.get("status") == "error":
+                        st.error(res.get("message"))
+                    else:
+                        st.markdown("---")
+                        st.markdown(f"#### Analyse-Ergebnis für {test_ticker_a} & {test_ticker_b}")
+                        
+                        score = res["score"]
+                        rec_color = res["recommendation_color"]
+                        details = res["details"]
+                        
+                        col_s1, col_s2 = st.columns([1, 2])
+                        with col_s1:
+                            st.metric("Hedge-Fund Eignungs-Score", f"{score}/100", delta=rec_color, delta_color="normal")
+                        with col_s2:
+                            st.info(details)
+                            
+                        # KPI metrics
+                        col_k1, col_k2, col_k3 = st.columns(3)
+                        with col_k1:
+                            st.metric("Pearson Korrelation (R)", f"{res['correlation']:.3f}", help="Je näher an 1, desto besser laufen die Assets parallel.")
+                        with col_k2:
+                            st.metric("Mean-Crossing Frequenz (p.a.)", f"{res['normalized_crossings_annual']:.1f} Mal", help="Wie oft der Spread pro Jahr seinen Mittelwert kreuzt. Höher = mehr Trading-Chancen.")
+                        with col_k3:
+                            hl_val = f"{res['half_life']:.1f} Tage" if res['half_life'] < 300 else "Keine Rückkehr"
+                            st.metric("Halbwertszeit (Mean Reversion)", hl_val, help="Wie viele Tage der Spread im Schnitt braucht, um die Hälfte einer Abweichung auszugleichen. Ideal sind 2-25 Tage.")
+                            
+                        if res["statsmodels_available"]:
+                            st.write(f"🔬 **Engle-Granger Cointegration p-Wert:** `{res['coint_p']:.4f}` (p < 0.05 gilt als statistisch signifikant cointegriert)")
+                        else:
+                            st.caption("Hinweis: Cointegration p-Wert wurde über Mean-Reversion Halbwertszeit approximiert (statsmodels nicht geladen).")
+                            
+        st.markdown("---")
+        
         pair_col1, pair_col2, pair_col3 = st.columns(3)
         with pair_col1:
             ticker_a = st.text_input("Asset A (z.B. KO / Gold)", value="KO").upper().strip()
