@@ -439,13 +439,11 @@ def generate_reportlab_pdf(df_history, metrics_data, period_str) -> bytes:
     story.append(Paragraph("KUMULATIVE WERTENTWICKLUNG (RE-BASED AUF 100)", h1_style))
     
     # We will generate the matplotlib chart and save it as an image buffer, then load it in reportlab
-    plt.figure(figsize=(10, 4.5))
+    fig, ax = plt.subplots(figsize=(10, 4.5))
     plt.style.use('dark_background')
     
     # Set background colors specifically
-    fig = plt.gcf()
     fig.patch.set_facecolor('#0d0f12')
-    ax = plt.gca()
     ax.set_facecolor('#1a1a24')
     
     # Re-base histories to 100
@@ -466,23 +464,23 @@ def generate_reportlab_pdf(df_history, metrics_data, period_str) -> bytes:
         alpha = 1.0 if lbl == "Arkham Portfolio" else 0.7
         
         rebased = (df_history[col] / df_history[col].iloc[0]) * 100
-        plt.plot(df_history.index, rebased, label=lbl, color=color, linewidth=lw, linestyle=ls, alpha=alpha)
+        ax.plot(df_history.index, rebased, label=lbl, color=color, linewidth=lw, linestyle=ls, alpha=alpha)
         
-    plt.title("Arkham Portfolio vs Benchmarks (Start = 100)", fontsize=11, fontname="sans-serif", color="#ffea00", weight="bold")
-    plt.grid(True, color="#2f3542", linestyle=":", alpha=0.5)
-    plt.legend(loc="upper left", frameon=True, facecolor="#0d0f12", edgecolor="#ff0055")
-    plt.tick_params(colors='#d1d5db', labelsize=8)
+    ax.set_title("Arkham Portfolio vs Benchmarks (Start = 100)", fontsize=11, fontname="sans-serif", color="#ffea00", weight="bold")
+    ax.grid(True, color="#2f3542", linestyle=":", alpha=0.5)
+    ax.legend(loc="upper left", frameon=True, facecolor="#0d0f12", edgecolor="#ff0055")
+    ax.tick_params(colors='#d1d5db', labelsize=8)
     
     # Format labels
-    plt.xlabel("Datum", color='#9ca3af', fontsize=8)
-    plt.ylabel("Verlauf (%)", color='#9ca3af', fontsize=8)
+    ax.set_xlabel("Datum", color='#9ca3af', fontsize=8)
+    ax.set_ylabel("Verlauf (%)", color='#9ca3af', fontsize=8)
     
     plt.tight_layout()
     
     chart_buffer = io.BytesIO()
-    plt.savefig(chart_buffer, format='png', dpi=200, bbox_inches='tight', facecolor='#0d0f12')
+    fig.savefig(chart_buffer, format='png', dpi=200, bbox_inches='tight', facecolor='#0d0f12')
     chart_buffer.seek(0)
-    plt.close()
+    plt.close(fig)
     
     story.append(Image(chart_buffer, width=540, height=243))
     story.append(Spacer(1, 10))

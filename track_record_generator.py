@@ -236,7 +236,7 @@ def generate_track_record_report(period="1M", output_path="reports/performance_t
         chart_df[col] = (df_all[col] / df_all[col].iloc[0]) * 100.0
         
     # 4. Generate Performance Chart
-    plt.figure(figsize=(10, 5.5))
+    fig, ax = plt.subplots(figsize=(10, 5.5))
     plt.style.use('dark_background') # keep it sleek dark
     
     # Colors
@@ -247,21 +247,21 @@ def generate_track_record_report(period="1M", output_path="reports/performance_t
         "Hedge Fund Index (QAI)": "#f59e0b" # amber
     }
     
-    plt.plot(chart_df.index, chart_df["Portfolio"], label="Ihr Portfolio", color=colors_map["Portfolio"], linewidth=2.5)
+    ax.plot(chart_df.index, chart_df["Portfolio"], label="Ihr Portfolio", color=colors_map["Portfolio"], linewidth=2.5)
     for col in chart_df.columns:
         if col != "Portfolio":
-            plt.plot(chart_df.index, chart_df[col], label=col, color=colors_map.get(col, "#ffffff"), linestyle="--", alpha=0.8)
+            ax.plot(chart_df.index, chart_df[col], label=col, color=colors_map.get(col, "#ffffff"), linestyle="--", alpha=0.8)
             
-    plt.title("Kumulative Performance vs Benchmarks (Re-based starting at 100)", fontsize=12, pad=15)
-    plt.xlabel("Datum", fontsize=10)
-    plt.ylabel("Verlauf (%)", fontsize=10)
-    plt.legend(loc="upper left")
-    plt.grid(True, linestyle=":", alpha=0.3)
+    ax.set_title("Kumulative Performance vs Benchmarks (Re-based starting at 100)", fontsize=12, pad=15)
+    ax.set_xlabel("Datum", fontsize=10)
+    ax.set_ylabel("Verlauf (%)", fontsize=10)
+    ax.legend(loc="upper left")
+    ax.grid(True, linestyle=":", alpha=0.3)
     plt.tight_layout()
     
     temp_chart_path = output_path.replace(".pdf", "_temp_chart.png")
-    plt.savefig(temp_chart_path, dpi=200)
-    plt.close()
+    fig.savefig(temp_chart_path, dpi=200)
+    plt.close(fig)
     
     # 5. Calculate Metrics for table
     metrics_list = []

@@ -298,9 +298,10 @@ def render_cashflow_tab(get_single_ticker_data, calculate_scores):
                 ax.spines['top'].set_visible(False)
                 ax.spines['right'].set_visible(False)
                 ax.grid(True, color='#374151', linestyle='--', alpha=0.5)
-                plt.xticks(rotation=30)
-                plt.tight_layout()
+                ax.tick_params(axis='x', labelrotation=30)
+                fig.tight_layout()
                 st.pyplot(fig)
+                plt.close(fig)
                 
                 # Chart 2: Category breakdown pie chart (Only positive cash inflows to prevent matplotlib ValueError)
                 cat_data = ledger_df.groupby("Type")["Amount"].sum()
@@ -325,8 +326,9 @@ def render_cashflow_tab(get_single_ticker_data, calculate_scores):
                         
                     ax2.axis('equal')  
                     ax2.set_title("Cashflow-Einnahmen nach Kategorien", color='#f3f4f6', fontsize=11, fontweight='bold', pad=10)
-                    plt.tight_layout()
+                    fig2.tight_layout()
                     st.pyplot(fig2)
+                    plt.close(fig2)
                 else:
                     st.info("Keine positiven Cashflow-Einnahmen für Verteilungs-Kreisdiagramm vorhanden.")
             else:
