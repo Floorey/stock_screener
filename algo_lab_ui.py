@@ -109,13 +109,13 @@ def render_algo_lab_tab():
                 
                 # Place real Alpaca order if configured
                 if is_alpaca_configured():
-                    status_code, order_res = place_order(
+                    order_res = place_order(
                         symbol=exec_ticker,
                         qty=slice_qty,
                         side=exec_side.lower(),
                         order_type="market"
                     )
-                    if status_code in [200, 201] or order_res.get("status") == "success":
+                    if order_res.get("status") == "success":
                         order_id = order_res.get("order", {}).get("id", "N/A")
                         status = "filled"
                     else:
@@ -423,8 +423,8 @@ def render_algo_lab_tab():
                                     st.error("Bitte bestätigen Sie die Orderausführung.")
                                 else:
                                     side = "sell" if diff_shares < 0 else "buy"
-                                    code, res = place_order(ca_ticker, abs(diff_shares), side, "market")
-                                    if code in [200, 201] or res.get("status") == "success":
+                                    res = place_order(ca_ticker, abs(diff_shares), side, "market")
+                                    if res.get("status") == "success":
                                         st.success(f"Erfolgreich! Hedge-Order übergeben. ID: {res.get('order', {}).get('id')}")
                                     else:
                                         st.error(f"Fehler bei Ausführung: {res.get('message')}")
