@@ -22,6 +22,7 @@ from report_generator import generate_pdf_report
 from options_ui import render_options_tab
 from cashflow_ui import render_cashflow_tab
 from performance_ui import render_performance_tab
+from algo_lab_ui import render_algo_lab_tab
 from risk_manager import (
     fetch_portfolio_positions,
     calculate_portfolio_var,
@@ -236,7 +237,7 @@ if "macro_futures_df" in st.session_state and not st.session_state["macro_future
     )
 
 # Initialize Tabs
-tab1, tab_wl, tab_opt, tab_perf, tab2, tab_trade, tab_cash, tab_strat, tab_risk, tab3 = st.tabs([
+tab1, tab_wl, tab_opt, tab_perf, tab2, tab_trade, tab_cash, tab_strat, tab_risk, tab_algo, tab3 = st.tabs([
     "🎯 Screener Dashboard", 
     "⭐ Watchlist Manager", 
     "🎫 Options-Screener",
@@ -246,6 +247,7 @@ tab1, tab_wl, tab_opt, tab_perf, tab2, tab_trade, tab_cash, tab_strat, tab_risk,
     "💸 Cashflow-Management",
     "⚡ Strategie-Desk (Option A & mehr)",
     "🛡️ Risk-Manager & Stress-Test",
+    "🔬 Algo-Trading Testlab",
     "📄 PDF Finanzbericht Analyzer"
 ])
 
@@ -2221,6 +2223,12 @@ with tab_risk:
                 mime="application/pdf",
                 key="risk_download_pdf_btn"
             )
+
+# ----------------------------------------------------
+# TAB ALGO: ALGO-TRADING TESTLAB
+# ----------------------------------------------------
+with tab_algo:
+    render_algo_lab_tab()
 
 # ----------------------------------------------------
 # TAB 3: PDF FINANCIAL REPORT ANALYZER
