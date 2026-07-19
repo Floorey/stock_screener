@@ -9,7 +9,7 @@ import os
 import time
 from datetime import datetime
 from execution_algo import ExecutionAlgoManager
-from arbitrage_lab import StatisticalArbitrageLab, calculate_black_scholes_delta, calculate_greeks
+from arbitrage_lab import StatisticalArbitrageLab, calculate_black_scholes_delta, calculate_greeks, norm
 from alpaca_trader import is_alpaca_configured, get_account_info, place_order, get_positions
 from watchlist_manager import load_watchlist
 
@@ -21,7 +21,7 @@ def render_algo_lab_tab():
     sub_tab1, sub_tab2, sub_tab3, sub_tab4 = st.tabs([
         "🤖 Algorithmic Execution (OMS)",
         "📈 Statistical Arbitrage (Pairs)",
-        "🎫 Convertible Arbitrage & Delta Hedging",
+        "🎫 Option Delta-Hedging & Volatility Lab",
         "⚖️ Long/Short Equity Basket"
     ])
     
@@ -404,115 +404,656 @@ def render_algo_lab_tab():
 
 
     # -------------------------------------------------------------------------
-    # SUB-TAB 3: CONVERTIBLE ARBITRAGE & DELTA HEDGING
+    # SUB-TAB 3: OPTION DELTA-HEDGING & VOLATILITY LAB
     # -------------------------------------------------------------------------
     with sub_tab3:
-        st.subheader("Convertible Arbitrage Lab (Option Delta-Hedging)")
-        st.write("Neutralisieren Sie das Richtungsrisiko (Delta) einer Long-Option / Wandelanleihe durch dynamischen Leerverkauf der zugrunde liegenden Aktie.")
+        st.subheader("Option Delta-Hedging & Volatility Lab")
+        st.write("Absicherung von Richtungsrisiken (Delta-Hedged Optionsportfolios) und statistisches Volatilitätstrading (Gamma-Scalping) mit US-Optionen.")
         
-        ca_col1, ca_col2, ca_col3 = st.columns(3)
-        with ca_col1:
-            ca_ticker = st.text_input("Underlying Aktie (z.B. MSTR, TSLA)", value="MSTR", key="ca_ticker_input").upper().strip()
-            ca_contracts = st.number_input("Anzahl Call Kontrakte (Long)", min_value=1, value=10, step=1)
-        with ca_col2:
-            ca_strike = st.number_input("Option Strike Price ($)", min_value=1.0, value=100.0, step=1.0)
-            ca_iv = st.slider("Implied Volatility (IV %)", min_value=5.0, max_value=250.0, value=80.0, step=1.0) / 100.0
-        with ca_col3:
-            ca_days = st.number_input("Restlaufzeit (Tage)", min_value=1, value=30, step=1)
-            ca_r = st.slider("Risikofreier Zins (r %)", min_value=0.0, max_value=10.0, value=4.0, step=0.1) / 100.0
-
-        run_ca = st.button("📊 Delta-Hedge berechnen", key="run_ca_btn")
+        opt_lab_tab1, opt_lab_tab2, opt_lab_tab3 = st.tabs([
+            "🎯 Reines Delta-Hedging",
+            "🌀 Gamma Scalping Simulator",
+            "📊 Execution & Spread Analyzer"
+        ])
         
-        if run_ca or ca_ticker:
-            with st.spinner(f"Hole aktuellen Kurs für {ca_ticker}..."):
-                try:
-                    tk = yf.Ticker(ca_ticker)
-                    hist = tk.history(period="1d")
-                    if hist.empty:
-                        ca_s = 100.77
+        # ---------------------------------------------------------------------
+        # Tab 3.1: Reines Delta-Hedging
+        # ---------------------------------------------------------------------
+        with opt_lab_tab1:
+            st.write("### 🎯 Reines Option Delta-Hedging")
+            st.write("Neutralisieren Sie das Richtungsrisiko (Delta) einer reinen Long- oder Short-Optionen-Position durch dynamisches Kaufen oder Leerverkaufen der zugrunde liegenden Aktie.")
+            
+            dh_col1, dh_col2, dh_col3 = st.columns(3)
+            with dh_col1:
+                dh_ticker = st.text_input("Underlying Aktie (z.B. MSTR, TSLA)", value="MSTR", key="dh_ticker_input").upper().strip()
+                dh_contracts = st.number_input("Anzahl Kontrakte", min_value=1, value=10, step=1, key="dh_contracts_input")
+                dh_opt_type = st.selectbox("Optionstyp", ["Call", "Put"], key="dh_opt_type_input")
+            with dh_col2:
+                dh_strike = st.number_input("Option Strike Price ($)", min_value=1.0, value=100.0, step=1.0, key="dh_strike_input")
+                dh_iv = st.slider("Implied Volatility (IV %)", min_value=5.0, max_value=250.0, value=80.0, step=1.0, key="dh_iv_input") / 100.0
+                dh_pos_type = st.selectbox("Position", ["Long", "Short"], key="dh_pos_type_input")
+            with dh_col3:
+                dh_days = st.number_input("Restlaufzeit (Tage)", min_value=1, value=30, step=1, key="dh_days_input")
+                dh_r = st.slider("Risikofreier Zins (r %)", min_value=0.0, max_value=10.0, value=4.0, step=0.1, key="dh_r_input") / 100.0
+            
+            run_dh = st.button("📊 Delta-Hedge berechnen", key="run_dh_btn")
+            
+            if run_dh or dh_ticker:
+                with st.spinner(f"Hole aktuellen Kurs für {dh_ticker}..."):
+                    try:
+                        tk = yf.Ticker(dh_ticker)
+                        hist = tk.history(period="1d")
+                        if hist.empty:
+                            dh_s = 100.0
+                        else:
+                            dh_s = float(hist["Close"].iloc[-1])
+                            
+                        T_years = dh_days / 365.0
+                        greeks = calculate_greeks(dh_s, dh_strike, T_years, dh_r, dh_iv, dh_opt_type.lower())
+                        
+                        # Position multiplier
+                        pos_mult = 1.0 if dh_pos_type == "Long" else -1.0
+                        
+                        # Greeks metrics
+                        opt_delta = greeks["delta"]
+                        pos_delta = opt_delta * 100 * dh_contracts * pos_mult
+                        pos_gamma = greeks["gamma"] * 100 * dh_contracts * pos_mult
+                        pos_theta = greeks["theta"] * 100 * dh_contracts * pos_mult
+                        pos_vega = greeks["vega"] * 100 * dh_contracts * pos_mult
+                        
+                        # Target stock shares to hold (to make combined delta = 0)
+                        shares_to_hold_round = int(np.round(-pos_delta))
+                        
+                        st.markdown("### 🦇 Griechische Kennzahlen & Absicherungsbedarf")
+                        
+                        m_col1, m_col2, m_col3, m_col4 = st.columns(4)
+                        with m_col1:
+                            st.metric("Option Delta (Δ)", f"{opt_delta:.4f}", help="Sensitivität der Option gegenüber $1 Kursbewegung.")
+                        with m_col2:
+                            st.metric("Position Delta (Δ_pos)", f"{pos_delta:.2f}", help="Kombiniertes Delta der Optionsposition (Einheiten der Aktie).")
+                        with m_col3:
+                            st.metric("Hedge-Zielposition", f"{shares_to_hold_round} Shares", help="Ziel-Aktienbestand für Delta-Neutralität.")
+                        with m_col4:
+                            st.metric("Position Gamma (Γ_pos)", f"{pos_gamma:.4f}", help="Veränderung des Positionsdeltas bei $1 Kursbewegung.")
+                            
+                        if shares_to_hold_round < 0:
+                            rec_text = f"**{abs(shares_to_hold_round)} Aktien leerverkaufen (Short)**"
+                        elif shares_to_hold_round > 0:
+                            rec_text = f"**{abs(shares_to_hold_round)} Aktien kaufen (Long)**"
+                        else:
+                            rec_text = "**Keine Aktien benötigt (Bereits delta-neutral)**"
+                            
+                        st.write(f"Um Ihre {dh_pos_type}-{dh_opt_type}-Position ({dh_contracts} Kontrakte) delta-neutral abzusichern, müssen Sie aktuell {rec_text} von **{dh_ticker}** bei einem Kurs von **${dh_s:.2f}** halten.")
+                        
+                        # Risk Profile Chart
+                        prices = np.linspace(dh_s * 0.8, dh_s * 1.2, 50)
+                        deltas = [calculate_black_scholes_delta(p, dh_strike, T_years, dh_r, dh_iv, dh_opt_type.lower()) * 100 * dh_contracts * pos_mult for p in prices]
+                        combined_deltas = [d + shares_to_hold_round for d in deltas]
+                        
+                        fig, ax = plt.subplots(figsize=(10, 4))
+                        fig.patch.set_facecolor('#0f172a')
+                        ax.set_facecolor('#1e293b')
+                        ax.tick_params(colors='#94a3b8')
+                        ax.xaxis.label.set_color('#94a3b8')
+                        ax.yaxis.label.set_color('#94a3b8')
+                        ax.title.set_color('#f8fafc')
+                        ax.grid(True, color='#334155', linestyle=':')
+                        
+                        ax.plot(prices, combined_deltas, color="#00ffcc", linewidth=2.5, label="Kombiniertes Delta (Hedged)")
+                        ax.plot(prices, deltas, color="#a855f7", linestyle="--", alpha=0.6, label="Unhedged Positions-Delta")
+                        ax.axvline(dh_s, color="#f43f5e", linestyle="--", label="Aktueller Kurs")
+                        ax.axhline(0, color="#f8fafc", linestyle=":", alpha=0.5)
+                        ax.set_ylabel("Gesamt-Delta (Δ)")
+                        ax.set_xlabel(f"Aktienpreis ({dh_ticker})")
+                        ax.set_title("Hedge-Sensitivität (Gamma-Kurve: Delta-Shift bei Kursbewegungen)")
+                        ax.legend(facecolor='#1e293b', labelcolor='#f8fafc')
+                        st.pyplot(fig)
+                        
+                        # Live Execution Panel
+                        st.markdown("### 🚀 Delta-Hedge Ausführen")
+                        if not is_alpaca_configured():
+                            st.warning("Alpaca ist nicht konfiguriert. Hedge-Ausführung deaktiviert.")
+                        else:
+                            st.info("🟢 Alpaca-Verbindung bereit.")
+                            
+                            # Fetch existing position to check if we already hold some shares
+                            existing_qty = 0
+                            positions = get_positions()
+                            if positions:
+                                for pos in positions:
+                                    if pos.get("symbol") == dh_ticker:
+                                        existing_qty = int(pos.get("qty"))
+                                        break
+                                        
+                            st.write(f"Aktueller Bestand an {dh_ticker}-Aktien im Alpaca Depot: **{existing_qty}** Shares.")
+                            diff_shares = shares_to_hold_round - existing_qty
+                            
+                            if diff_shares != 0:
+                                action_str = f"{abs(diff_shares)} Aktien KAUFEN (Hedge-Reduktion)" if diff_shares > 0 else f"{abs(diff_shares)} Aktien LEERVERKAUFEN"
+                                st.write(f"Differenz zum Ziel-Hedge: **{action_str}**")
+                                
+                                confirm_hedge = st.checkbox("Hedge-Order über Alpaca ausführen", value=False, key="dh_confirm_hedge")
+                                if st.button("🚀 Hedge-Order an Alpaca senden", key="dh_hedge_exec_btn"):
+                                    if not confirm_hedge:
+                                        st.error("Bitte bestätigen Sie die Orderausführung.")
+                                    else:
+                                        side = "buy" if diff_shares > 0 else "sell"
+                                        res = place_order(dh_ticker, abs(diff_shares), side, "market")
+                                        if res.get("status") == "success":
+                                            st.success(f"Erfolgreich! Hedge-Order übergeben. ID: {res.get('order', {}).get('id')}")
+                                        else:
+                                            st.error(f"Fehler bei Ausführung: {res.get('message')}")
+                            else:
+                                st.success("Ihr Portfolio ist bezüglich dieses Assets bereits perfekt delta-neutral abgesichert!")
+                    except Exception as e:
+                        st.error(f"Fehler bei Berechnungen: {e}")
+                        
+        # ---------------------------------------------------------------------
+        # Tab 3.2: Gamma Scalping Simulator
+        # ---------------------------------------------------------------------
+        with opt_lab_tab2:
+            st.write("### 🌀 Volatility Arbitrage (Gamma Scalping)")
+            st.write("Kaufen Sie einen Long Straddle oder Strangle (Long Volatilität) und nutzen Sie die Kursbewegungen, um durch kontinuierliches Rebalancing (tief kaufen, hoch verkaufen) Gewinne zu erzielen, die den Zeitwertverfall (Theta) kompensieren.")
+            
+            # Helper to calculate BS price inside UI
+            def calculate_bs_price(S, K, T, r, sigma, option_type="call"):
+                if T <= 0:
+                    return max(0.0, S - K) if option_type.lower() == "call" else max(0.0, K - S)
+                d1 = (np.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
+                d2 = d1 - sigma * np.sqrt(T)
+                if option_type.lower() == "call":
+                    return S * norm.cdf(d1) - K * np.exp(-r * T) * norm.cdf(d2)
+                else:
+                    return K * np.exp(-r * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
+            
+            gs_col1, gs_col2, gs_col3 = st.columns(3)
+            with gs_col1:
+                gs_ticker = st.text_input("Underlying Ticker", value="MSTR", key="gs_ticker_input").upper().strip()
+                gs_strategy = st.selectbox("Strategie", ["Long Straddle (Call + Put @ Strike)", "Long Strangle (Call @ +5%, Put @ -5%)"], key="gs_strat_input")
+                gs_contracts = st.number_input("Anzahl Kontrakte", min_value=1, value=10, step=1, key="gs_contracts_input")
+            with gs_col2:
+                gs_stock_px = st.number_input("Aktueller Aktienkurs ($)", min_value=1.0, value=100.0, step=1.0, key="gs_px_input")
+                gs_iv = st.slider("Implizierte Volatilität (IV %)", min_value=10.0, max_value=250.0, value=100.0, step=5.0, key="gs_iv_input") / 100.0
+                gs_path_type = st.selectbox("Simulierter Preispfad", ["Oszillierend (Seitwärts/Fluctuating)", "Aufwärtstrend + Rauschen", "Abwärtstrend + Rauschen"], key="gs_path_input")
+            with gs_col3:
+                gs_days = st.number_input("Laufzeit Optionen (Tage)", min_value=5, value=20, step=1, key="gs_days_input")
+                gs_r = st.slider("Risikofreier Zins (r %)", min_value=0.0, max_value=10.0, value=4.0, step=0.1, key="gs_r_input") / 100.0
+                
+            run_sim = st.button("🌀 Gamma Scalping Simulation starten", key="run_gs_sim_btn")
+            
+            if run_sim:
+                st.markdown("### 📈 Simulationsergebnisse (Täglicher Rebalancing-Pfad)")
+                
+                # Determine strikes
+                if "Straddle" in gs_strategy:
+                    strike_call = gs_stock_px
+                    strike_put = gs_stock_px
+                else:
+                    strike_call = np.round(gs_stock_px * 1.05, 2)
+                    strike_put = np.round(gs_stock_px * 0.95, 2)
+                
+                # Generate price path over 10 steps (representing 10 half-days, or 5 days total, dt = 0.5 days)
+                steps = 11
+                dt_days = 0.5
+                dt_years = dt_days / 365.0
+                
+                # Random seed for reproducibility of current run but varying
+                np.random.seed(int(time.time()) % 1000)
+                
+                prices = [gs_stock_px]
+                sigma_step = gs_iv * np.sqrt(dt_years)
+                
+                for idx in range(1, steps):
+                    if "Oszillierend" in gs_path_type:
+                        phase = idx * np.pi / 2.5
+                        p_change = 1.5 * sigma_step * np.sin(phase) + np.random.normal(0, 0.4 * sigma_step)
+                        prices.append(np.round(gs_stock_px * (1.0 + p_change), 2))
+                    elif "Aufwärts" in gs_path_type:
+                        p_change = 0.5 * sigma_step * idx + np.random.normal(0, 0.4 * sigma_step)
+                        prices.append(np.round(gs_stock_px * (1.0 + p_change), 2))
+                    else: # Downward
+                        p_change = -0.5 * sigma_step * idx + np.random.normal(0, 0.4 * sigma_step)
+                        prices.append(np.round(gs_stock_px * (1.0 + p_change), 2))
+                
+                # Track simulation variables
+                sim_records = []
+                
+                # Step 0 setup
+                s_0 = prices[0]
+                t_0 = gs_days / 365.0
+                
+                call_px_0 = calculate_bs_price(s_0, strike_call, t_0, gs_r, gs_iv, "call")
+                put_px_0 = calculate_bs_price(s_0, strike_put, t_0, gs_r, gs_iv, "put")
+                opt_val_0 = (call_px_0 + put_px_0) * 100 * gs_contracts
+                
+                call_d_0 = calculate_black_scholes_delta(s_0, strike_call, t_0, gs_r, gs_iv, "call")
+                put_d_0 = calculate_black_scholes_delta(s_0, strike_put, t_0, gs_r, gs_iv, "put")
+                net_d_0 = (call_d_0 + put_d_0) * 100 * gs_contracts
+                
+                # Initial Stock position to hedge delta
+                stock_qty_0 = -int(np.round(net_d_0))
+                stock_val_0 = stock_qty_0 * s_0
+                
+                # Initial Capital setup: we assume we start with 0 cash net, so Cash = -OptionVal - StockVal
+                cash_0 = -opt_val_0 - stock_val_0
+                
+                sim_records.append({
+                    "Schritt": 0,
+                    "Tag": 0.0,
+                    "Aktienkurs ($)": s_0,
+                    "Call Preis ($)": call_px_0,
+                    "Put Preis ($)": put_px_0,
+                    "Netto Delta": net_d_0,
+                    "Aktien-Bestand": stock_qty_0,
+                    "Aktion": "Setup",
+                    "Aktion Menge": 0,
+                    "Option Wert ($)": opt_val_0,
+                    "Aktien Wert ($)": stock_val_0,
+                    "Cash ($)": cash_0,
+                    "Depot-Wert ($)": 0.0,
+                    "Netto P&L ($)": 0.0
+                })
+                
+                # Loop through steps
+                stock_qty_prev = stock_qty_0
+                cash_prev = cash_0
+                
+                for idx in range(1, steps):
+                    s_i = prices[idx]
+                    t_i = max(0.001, (gs_days - idx * dt_days) / 365.0)
+                    tag_i = idx * dt_days
+                    
+                    call_px_i = calculate_bs_price(s_i, strike_call, t_i, gs_r, gs_iv, "call")
+                    put_px_i = calculate_bs_price(s_i, strike_put, t_i, gs_r, gs_iv, "put")
+                    opt_val_i = (call_px_i + put_px_i) * 100 * gs_contracts
+                    
+                    call_d_i = calculate_black_scholes_delta(s_i, strike_call, t_i, gs_r, gs_iv, "call")
+                    put_d_i = calculate_black_scholes_delta(s_i, strike_put, t_i, gs_r, gs_iv, "put")
+                    net_d_i = (call_d_i + put_d_i) * 100 * gs_contracts
+                    
+                    # Target Stock Qty
+                    stock_qty_target = -int(np.round(net_d_i))
+                    trade_qty = stock_qty_target - stock_qty_prev
+                    
+                    if trade_qty > 0:
+                        action_str = "Kauf"
+                        cash_i = cash_prev - (trade_qty * s_i)
+                    elif trade_qty < 0:
+                        action_str = "Verkauf"
+                        cash_i = cash_prev + (abs(trade_qty) * s_i)
                     else:
-                        ca_s = float(hist["Close"].iloc[-1])
+                        action_str = "Hold"
+                        cash_i = cash_prev
                         
-                    T_years = ca_days / 365.0
-                    greeks = calculate_greeks(ca_s, ca_strike, T_years, ca_r, ca_iv)
+                    stock_val_i = stock_qty_target * s_i
+                    portfolio_val_i = opt_val_i + stock_val_i + cash_i
                     
-                    st.markdown("### 🦇 Griechische Kennzahlen & Absicherungs-Bedarf")
+                    # Log record
+                    sim_records.append({
+                        "Schritt": idx,
+                        "Tag": tag_i,
+                        "Aktienkurs ($)": s_i,
+                        "Call Preis ($)": call_px_i,
+                        "Put Preis ($)": put_px_i,
+                        "Netto Delta": net_d_i,
+                        "Aktien-Bestand": stock_qty_target,
+                        "Aktion": action_str,
+                        "Aktion Menge": abs(trade_qty),
+                        "Option Wert ($)": opt_val_i,
+                        "Aktien Wert ($)": stock_val_i,
+                        "Cash ($)": cash_i,
+                        "Depot-Wert ($)": portfolio_val_i,
+                        "Netto P&L ($)": portfolio_val_i
+                    })
                     
-                    # Target shares to short
-                    shares_to_short = int(np.round(greeks["delta"] * 100 * ca_contracts))
-                    
-                    cag_col1, cag_col2, cag_col3, cag_col4 = st.columns(4)
-                    with cag_col1:
-                        st.metric("Aktienkurs (Live)", f"${ca_s:.2f}")
-                    with cag_col2:
-                        st.metric("Option Delta (Δ)", f"{greeks['delta']:.4f}", help="Sensitivität gegenüber dem Aktienpreis.")
-                    with cag_col3:
-                        st.metric("Hedge-Short-Volumen", f"{shares_to_short} Shares", help="Anzahl der leerzuverkaufenden Aktien für Delta-Neutralität.")
-                    with cag_col4:
-                        st.metric("Option Gamma (Γ)", f"{greeks['gamma']:.4f}", help="Veränderung des Delta bei 1$ Kursbewegung.")
-                        
-                    st.write(f"Um Ihre Long-Call-Position ({ca_contracts} Kontrakte = 1.000 Basisaktien nominal) delta-neutral abzusichern, müssen Sie exakt **{shares_to_short} Aktien** von **{ca_ticker} leerverkaufen**.")
-                    
-                    # Risk Profile Chart
-                    prices = np.linspace(ca_s * 0.8, ca_s * 1.2, 50)
-                    deltas = [calculate_black_scholes_delta(p, ca_strike, T_years, ca_r, ca_iv) for p in prices]
-                    
-                    fig, ax = plt.subplots(figsize=(10, 4))
-                    fig.patch.set_facecolor('#0f172a')
+                    # Update state
+                    stock_qty_prev = stock_qty_target
+                    cash_prev = cash_i
+                
+                df_sim = pd.DataFrame(sim_records)
+                
+                # Show key metrics of simulation
+                final_row = df_sim.iloc[-1]
+                initial_opt_cost = df_sim.iloc[0]["Option Wert ($)"]
+                final_opt_val = final_row["Option Wert ($)"]
+                total_theta_cost = initial_opt_cost - final_opt_val
+                scalping_pnl = final_row["Netto P&L ($)"] + total_theta_cost
+                
+                kpi_col1, kpi_col2, kpi_col3, kpi_col4 = st.columns(4)
+                with kpi_col1:
+                    st.metric("Netto P&L (Ergebnis)", f"${final_row['Netto P&L ($)']:+,.2f}", 
+                              delta="Gewinn" if final_row['Netto P&L ($)'] > 0 else "Verlust")
+                with kpi_col2:
+                    st.metric("Scalping-Gewinn (Gamma)", f"${scalping_pnl:,.2f}", 
+                              help="Realisierter Gewinn aus den Aktien-Hedge-Transaktionen (Kauf im Tief, Verkauf im Hoch).")
+                with kpi_col3:
+                    st.metric("Options-Wertverlust (Theta)", f"-${total_theta_cost:,.2f}", 
+                              help="Zeitwertverlust der Call- und Put-Optionen über den Simulationszeitraum.")
+                with kpi_col4:
+                    performance_ratio = (scalping_pnl / total_theta_cost) * 100 if total_theta_cost > 0 else 0
+                    st.metric("Theta-Deckungsgrad (%)", f"{performance_ratio:.1f}%", 
+                              help="Wie viel Prozent des Options-Wertverlusts durch das Gamma-Scalping wieder eingespielt wurden. >100% bedeutet profitabel.")
+                
+                # Show dynamic plot
+                fig, (ax_p, ax_pl) = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
+                fig.patch.set_facecolor('#0f172a')
+                
+                for ax in [ax_p, ax_pl]:
                     ax.set_facecolor('#1e293b')
                     ax.tick_params(colors='#94a3b8')
                     ax.xaxis.label.set_color('#94a3b8')
                     ax.yaxis.label.set_color('#94a3b8')
                     ax.title.set_color('#f8fafc')
                     ax.grid(True, color='#334155', linestyle=':')
-                    
-                    ax.plot(prices, deltas, color="#00ffcc", linewidth=2.5, label="Dynamisches Delta")
-                    ax.axvline(ca_s, color="#f43f5e", linestyle="--", label="Aktueller Kurs")
-                    ax.axhline(greeks["delta"], color="#a855f7", linestyle=":")
-                    ax.set_ylabel("Delta (Δ)")
-                    ax.set_xlabel(f"Aktienpreis ({ca_ticker})")
-                    ax.set_title("Hedge-Sensitivität (Gamma-Kurve: Delta-Shift)")
-                    ax.legend(facecolor='#1e293b', labelcolor='#f8fafc')
-                    st.pyplot(fig)
-                    
-                    # Live Execution Panel
-                    st.markdown("### 🚀 Delta-Hedge Ausführen")
-                    if not is_alpaca_configured():
-                        st.warning("Alpaca ist nicht konfiguriert. Hedge-Ausführung deaktiviert.")
-                    else:
-                        st.info("🟢 Alpaca-Verbindung bereit.")
+                
+                # Chart 1: Stock Price path
+                ax_p.plot(df_sim["Tag"], df_sim["Aktienkurs ($)"], marker="o", color="#38bdf8", linewidth=2, label="Aktienkurs ($)")
+                ax_p.axhline(gs_stock_px, color="#ef4444", linestyle="--", label="Strike Price (ATM)")
+                ax_p.set_ylabel("Aktienkurs ($)")
+                ax_p.set_title(f"Simulierter Kursverlauf für {gs_ticker} (IV: {gs_iv*100:.0f}%)")
+                ax_p.legend(facecolor='#1e293b', labelcolor='#f8fafc')
+                
+                # Chart 2: Cumulative P&L and Scalping vs Theta
+                opt_decay_cum = [df_sim.iloc[0]["Option Wert ($)"] - row["Option Wert ($)"] for idx, row in df_sim.iterrows()]
+                scalp_cum = [row["Netto P&L ($)"] + opt_decay_cum[idx] for idx, row in df_sim.iterrows()]
+                
+                ax_pl.plot(df_sim["Tag"], df_sim["Netto P&L ($)"], marker="s", color="#22c55e" if final_row["Netto P&L ($)"] >= 0 else "#ef4444", linewidth=2.5, label="Netto Portfolio P&L")
+                ax_pl.bar(df_sim["Tag"], [-x for x in opt_decay_cum], color="#f43f5e", alpha=0.4, width=0.2, label="Kumulativer Theta-Verlust")
+                ax_pl.plot(df_sim["Tag"], scalp_cum, color="#a855f7", linestyle=":", label="Kumulativer Scalping-Gewinn")
+                ax_pl.set_xlabel("Tag")
+                ax_pl.set_ylabel("P&L ($)")
+                ax_pl.set_title("P&L-Zerlegung: Gamma-Gewinn vs. Theta-Verfall")
+                ax_pl.legend(facecolor='#1e293b', labelcolor='#f8fafc')
+                
+                st.pyplot(fig)
+                
+                # Table details of the steps
+                st.markdown("### 📋 Transaktionsprotokoll")
+                
+                display_df = df_sim.copy()
+                display_df["Preisschritt"] = display_df["Schritt"].apply(lambda s: f"Schritt {s}")
+                display_df["Aktienkurs ($)"] = display_df["Aktienkurs ($)"].apply(lambda x: f"${x:.2f}")
+                display_df["Netto Delta"] = display_df["Netto Delta"].apply(lambda x: f"{x:.2f}")
+                display_df["Aktion Info"] = display_df.apply(lambda r: f"{r['Aktion']} {r['Aktion Menge']} Shares" if r["Aktion"] in ["Kauf", "Verkauf"] else r["Aktion"], axis=1)
+                display_df["Option Wert ($)"] = display_df["Option Wert ($)"].apply(lambda x: f"${x:,.2f}")
+                display_df["Depot-Wert ($)"] = display_df["Depot-Wert ($)"].apply(lambda x: f"${x:,.2f}")
+                display_df["Netto P&L ($)"] = display_df["Netto P&L ($)"].apply(lambda x: f"${x:,.2f}")
+                
+                st.dataframe(display_df[["Preisschritt", "Tag", "Aktienkurs ($)", "Netto Delta", "Aktien-Bestand", "Aktion Info", "Option Wert ($)", "Depot-Wert ($)", "Netto P&L ($)"]], hide_index=True, use_container_width=True)
+                
+        # ---------------------------------------------------------------------
+        # Tab 3.3: Execution & Spread Analyzer
+        # ---------------------------------------------------------------------
+        with opt_lab_tab3:
+            st.write("### 📊 Execution & Spread Analyzer")
+            st.write("Visualisierung des aktuellen Geld-Brief-Spreads (Bid-Ask Spread) von US-Optionen und Simulation von limitierten Orders innerhalb des Spreads (Mid-Price Orders) zur Reduzierung von Slippage.")
+            
+            ea_ticker = st.text_input("Ticker Symbol für Optionsanalyse", value="MSTR", key="ea_ticker_input").upper().strip()
+            
+            options_loaded = False
+            expiries = []
+            
+            if ea_ticker:
+                with st.spinner(f"Lade Optionskette für {ea_ticker}..."):
+                    try:
+                        tk = yf.Ticker(ea_ticker)
+                        expiries = list(tk.options)
+                        if expiries:
+                            options_loaded = True
+                    except Exception:
+                        options_loaded = False
                         
-                        # Fetch existing position to check if we already shorted some shares
-                        existing_qty = 0
-                        positions = get_positions()
-                        if positions:
-                            for pos in positions:
-                                if pos.get("symbol") == ca_ticker:
-                                    existing_qty = int(pos.get("qty"))
-                                    break
-                                    
-                        st.write(f"Aktueller Bestand an {ca_ticker}-Aktien im Alpaca Depot: **{existing_qty}** Shares.")
-                        diff_shares = -shares_to_short - existing_qty
-                        
-                        if diff_shares != 0:
-                            action_str = f"{abs(diff_shares)} Aktien LEERVERKAUFEN" if diff_shares < 0 else f"{abs(diff_shares)} Aktien KAUFEN (Hedge-Reduktion)"
-                            st.write(f"Differenz zum Ziel-Hedge: **{action_str}**")
-                            
-                            confirm_hedge = st.checkbox("Hedge-Order über Alpaca ausführen", value=False)
-                            if st.button("🚀 Hedge-Order an Alpaca senden", key="ca_hedge_exec_btn"):
-                                if not confirm_hedge:
-                                    st.error("Bitte bestätigen Sie die Orderausführung.")
-                                else:
-                                    side = "sell" if diff_shares < 0 else "buy"
-                                    res = place_order(ca_ticker, abs(diff_shares), side, "market")
-                                    if res.get("status") == "success":
-                                        st.success(f"Erfolgreich! Hedge-Order übergeben. ID: {res.get('order', {}).get('id')}")
-                                    else:
-                                        st.error(f"Fehler bei Ausführung: {res.get('message')}")
-                        else:
-                            st.success("Ihr Portfolio ist bezüglich dieses Assets bereits perfekt delta-neutral abgesichert!")
+            if options_loaded:
+                st.success(f"🟢 {len(expiries)} Options-Verfallstage für {ea_ticker} geladen.")
+                sel_ea_expiry = st.selectbox("Ablaufdatum (Expiry) wählen", expiries, key="ea_expiry_sel")
+                
+                try:
+                    chain = tk.option_chain(sel_ea_expiry)
+                    calls_orig = chain.calls
+                    puts_orig = chain.puts
+                    
+                    hist = tk.history(period="1d")
+                    stock_price = float(hist["Close"].iloc[-1]) if not hist.empty else 100.0
+                    
+                    # Filter strikes close to ATM
+                    calls = calls_orig[(calls_orig["strike"] >= stock_price * 0.8) & (calls_orig["strike"] <= stock_price * 1.2)].copy()
+                    puts = puts_orig[(puts_orig["strike"] >= stock_price * 0.8) & (puts_orig["strike"] <= stock_price * 1.2)].copy()
+                    
+                    for df_opt in [calls, puts]:
+                        df_opt["bid"] = df_opt["bid"].fillna(df_opt["lastPrice"] * 0.95).replace(0.0, df_opt["lastPrice"] * 0.95)
+                        df_opt["ask"] = df_opt["ask"].fillna(df_opt["lastPrice"] * 1.05).replace(0.0, df_opt["lastPrice"] * 1.05)
+                        df_opt["Spread_USD"] = df_opt["ask"] - df_opt["bid"]
+                        df_opt["Mid_Price"] = (df_opt["ask"] + df_opt["bid"]) / 2.0
+                        df_opt["Spread_Pct"] = (df_opt["Spread_USD"] / df_opt["Mid_Price"]) * 100
+                        df_opt["impliedVolatility"] = df_opt["impliedVolatility"] * 100.0
                 except Exception as e:
-                    st.error(f"Fehler bei Berechnungen: {e}")
+                    st.warning(f"Fehler beim Parsen der Live-Optionsdaten: {e}. Verwende simulierte Standard-Daten.")
+                    options_loaded = False
+            
+            if not options_loaded:
+                st.info("💡 Verwende realistische simulierte Optionsdaten für Analyse, da keine Live-Daten geladen werden konnten.")
+                stock_price = 100.0
+                sel_ea_expiry = "30-Tage Expiry (Mock)"
+                
+                strikes = np.arange(80.0, 122.5, 2.5)
+                mock_calls = []
+                mock_puts = []
+                
+                mock_T = 30.0 / 365.0
+                mock_r = 0.04
+                mock_iv = 0.80
+                
+                for k in strikes:
+                    call_px = calculate_bs_price(stock_price, k, mock_T, mock_r, mock_iv, "call")
+                    put_px = calculate_bs_price(stock_price, k, mock_T, mock_r, mock_iv, "put")
+                    
+                    dist = abs(k - stock_price)
+                    spread = 0.10 + 0.05 * dist + 0.005 * dist**2
+                    
+                    call_bid = max(0.01, np.round(call_px - spread/2.0, 2))
+                    call_ask = np.round(call_px + spread/2.0, 2)
+                    
+                    put_bid = max(0.01, np.round(put_px - spread/2.0, 2))
+                    put_ask = np.round(put_px + spread/2.0, 2)
+                    
+                    smile_iv = mock_iv + 0.02 * (k - stock_price)**2 / stock_price
+                    if k < stock_price:
+                        smile_iv += 0.005 * (stock_price - k)
+                        
+                    mock_calls.append({
+                        "contractSymbol": f"{ea_ticker}260821C{int(k*1000):08d}",
+                        "strike": k,
+                        "bid": call_bid,
+                        "ask": call_ask,
+                        "Spread_USD": call_ask - call_bid,
+                        "Mid_Price": (call_ask + call_bid) / 2.0,
+                        "Spread_Pct": ((call_ask - call_bid) / ((call_ask + call_bid)/2.0)) * 100.0,
+                        "impliedVolatility": smile_iv * 100.0,
+                        "volume": int(1000 / (1.0 + 0.1 * dist)),
+                        "openInterest": int(5000 / (1.0 + 0.05 * dist))
+                    })
+                    
+                    mock_puts.append({
+                        "contractSymbol": f"{ea_ticker}260821P{int(k*1000):08d}",
+                        "strike": k,
+                        "bid": put_bid,
+                        "ask": put_ask,
+                        "Spread_USD": put_ask - put_bid,
+                        "Mid_Price": (put_ask + put_bid) / 2.0,
+                        "Spread_Pct": ((put_ask - put_bid) / ((put_ask + put_bid)/2.0)) * 100.0,
+                        "impliedVolatility": smile_iv * 100.0,
+                        "volume": int(800 / (1.0 + 0.15 * dist)),
+                        "openInterest": int(4000 / (1.0 + 0.08 * dist))
+                    })
+                    
+                calls = pd.DataFrame(mock_calls)
+                puts = pd.DataFrame(mock_puts)
+            
+            # Options Visualizations
+            st.markdown(f"### 📊 Spread-Überwachung vs. Implizierte Volatilität (Smile)")
+            st.write(f"Aktueller Kurs der Aktie: **${stock_price:.2f}** | Expiry: **{sel_ea_expiry}**")
+            
+            ea_opt_type = st.radio("Optionstyp für Diagramm", ["Calls", "Puts"], horizontal=True, key="ea_opt_type_chart")
+            df_chart = calls if ea_opt_type == "Calls" else puts
+            
+            # Dual Axis Plot: Bid-Ask Spread ($) and Implied Volatility (%)
+            fig, ax_sp = plt.subplots(figsize=(10, 4.5))
+            fig.patch.set_facecolor('#0f172a')
+            ax_sp.set_facecolor('#1e293b')
+            ax_sp.tick_params(colors='#94a3b8')
+            ax_sp.xaxis.label.set_color('#94a3b8')
+            ax_sp.yaxis.label.set_color('#38bdf8')
+            ax_sp.title.set_color('#f8fafc')
+            ax_sp.grid(True, color='#334155', linestyle=':')
+            
+            # Spread line
+            ax_sp.plot(df_chart["strike"], df_chart["Spread_USD"], color="#38bdf8", marker="o", linewidth=2, label="Bid-Ask Spread ($)")
+            ax_sp.set_ylabel("Geld-Brief-Spread ($)", color="#38bdf8")
+            ax_sp.axvline(stock_price, color="#ef4444", linestyle="--", label="Aktienkurs (ATM)")
+            
+            # IV line on secondary axis
+            ax_iv = ax_sp.twinx()
+            ax_iv.tick_params(colors='#94a3b8')
+            ax_iv.yaxis.label.set_color('#a855f7')
+            ax_iv.plot(df_chart["strike"], df_chart["impliedVolatility"], color="#a855f7", marker="s", linestyle="--", linewidth=1.5, label="Implizierte Volatilität (IV %)")
+            ax_iv.set_ylabel("Implizierte Volatilität (IV %)", color="#a855f7")
+            
+            # Legends combined
+            lines1, labels1 = ax_sp.get_legend_handles_labels()
+            lines2, labels2 = ax_iv.get_legend_handles_labels()
+            ax_sp.legend(lines1 + lines2, labels1 + labels2, loc="upper center", facecolor='#1e293b', labelcolor='#f8fafc')
+            
+            ax_sp.set_xlabel("Basispreis (Strike)")
+            st.pyplot(fig)
+            
+            # Table View
+            with st.expander("📋 Tabelle der Optionsdaten anzeigen"):
+                st.write(f"#### {ea_opt_type} Kette")
+                formatted_table = df_chart.copy()
+                formatted_table["Strike"] = formatted_table["strike"].apply(lambda x: f"${x:.2f}")
+                formatted_table["Bid"] = formatted_table["bid"].apply(lambda x: f"${x:.2f}")
+                formatted_table["Ask"] = formatted_table["ask"].apply(lambda x: f"${x:.2f}")
+                formatted_table["Mid-Price"] = formatted_table["Mid_Price"].apply(lambda x: f"${x:.2f}")
+                formatted_table["Spread ($)"] = formatted_table["Spread_USD"].apply(lambda x: f"${x:.2f}")
+                formatted_table["Spread (%)"] = formatted_table["Spread_Pct"].apply(lambda x: f"{x:.1f}%")
+                formatted_table["IV (%)"] = formatted_table["impliedVolatility"].apply(lambda x: f"{x:.1f}%")
+                
+                st.dataframe(
+                    formatted_table[["contractSymbol", "Strike", "Bid", "Ask", "Mid-Price", "Spread ($)", "Spread (%)", "IV (%)", "volume", "openInterest"]],
+                    hide_index=True,
+                    use_container_width=True
+                )
+            
+            # Order-Typen-Test Simulator
+            st.markdown("---")
+            st.markdown("### 🎛️ Order-Typen-Test & Slippage-Minimierung")
+            st.write("Vergleichen Sie die Ausführungsrate und Slippage-Kosten einer aggressiven Market-Order mit einer geduldigen Mid-Price Limit-Order.")
+            
+            test_contract_symbol = st.selectbox(
+                "Options-Kontrakt für Test wählen",
+                options=df_chart["contractSymbol"].tolist(),
+                key="ea_test_contract_sel"
+            )
+            
+            con_row = df_chart[df_chart["contractSymbol"] == test_contract_symbol].iloc[0]
+            c_bid = con_row["bid"]
+            c_ask = con_row["ask"]
+            c_mid = con_row["Mid_Price"]
+            c_spread = con_row["Spread_USD"]
+            c_iv_val = con_row["impliedVolatility"] / 100.0
+            
+            col_t1, col_t2 = st.columns(2)
+            with col_t1:
+                st.markdown(f"""
+                <div style="background-color: #1e293b; border-radius: 8px; padding: 1rem; border: 1px solid #334155;">
+                    <h4>Kontrakt: {test_contract_symbol}</h4>
+                    <ul>
+                        <li><b>Bid (Geld):</b> ${c_bid:.2f}</li>
+                        <li><b>Ask (Brief):</b> ${c_ask:.2f}</li>
+                        <li><b>Mittelpreis (Mid):</b> ${c_mid:.2f}</li>
+                        <li><b>Spread:</b> ${c_spread:.2f} ({(c_spread/c_mid*100):.1f}%)</li>
+                        <li><b>Implizierte Volatilität (IV):</b> {(c_iv_val*100):.1f}%</li>
+                    </ul>
+                </div>
+                """, unsafe_allow_html=True)
+            with col_t2:
+                ea_side = st.selectbox("Transaktion", ["Kauf (Buy)", "Verkauf (Sell)"], key="ea_side_input")
+                ea_qty = st.number_input("Menge (Kontrakte)", min_value=1, value=5, step=1, key="ea_qty_input")
+                ea_wait = st.slider("Wartezeit Limit-Order (Minuten)", min_value=1, max_value=60, value=10, key="ea_wait_input")
+                
+            run_order_test = st.button("🧪 Order-Typen-Test starten (Monte Carlo Simulation)", key="run_ea_order_test_btn")
+            
+            if run_order_test:
+                sigma_opt = c_mid * c_iv_val * np.sqrt(ea_wait / 525600.0)
+                half_spread = c_spread / 2.0
+                
+                if sigma_opt <= 0:
+                    d = 99.0
+                else:
+                    d = half_spread / sigma_opt
+                
+                p_fill = 2.0 * (1.0 - norm.cdf(d))
+                p_fill = max(0.05, min(0.99, p_fill))
+                
+                st.write(f"Berechnete theoretische Fill-Wahrscheinlichkeit der Mid-Order: **{p_fill*100:.1f}%**")
+                
+                trials = 100
+                fills = 0
+                
+                progress_bar = st.progress(0.0)
+                
+                for i in range(trials):
+                    rand_val = np.random.rand()
+                    if rand_val <= p_fill:
+                        fills += 1
+                    if i % 10 == 0:
+                        progress_bar.progress((i + 1) / trials)
+                        time.sleep(0.02)
+                
+                progress_bar.progress(1.0)
+                
+                saving_per_contract = c_spread / 2.0
+                total_saving_if_filled = saving_per_contract * 100.0 * ea_qty
+                
+                realized_saving = fills * saving_per_contract * 100.0 * ea_qty / 100.0
+                
+                st.markdown("### 📊 Test-Ergebnis (100 simulierte Orders)")
+                
+                k_col1, k_col2, k_col3 = st.columns(3)
+                with k_col1:
+                    st.metric("Ausführungsrate (Fills)", f"{fills} / 100 Fills", 
+                              help="Anzahl der Limit-Orders, die innerhalb der Wartezeit gefüllt wurden.")
+                with k_col2:
+                    st.metric("Erzielte Ersparnis (Slippage)", f"${realized_saving:,.2f}", 
+                              help=f"Erzielte Kostenersparnis gegenüber einer Market-Order. Ein Einzeleffekt von ${saving_per_contract*100:.2f} pro gefülltem Kontrakt.")
+                with k_col3:
+                    potential_saving = total_saving_if_filled
+                    st.metric("Max. Potenzial bei 100% Fill", f"${potential_saving:,.2f}",
+                              help="Mögliche maximale Ersparnis, wenn alle Orders gefüllt worden wären.")
+                
+                fig_bar, ax_bar = plt.subplots(figsize=(6, 3))
+                fig_bar.patch.set_facecolor('#0f172a')
+                ax_bar.set_facecolor('#1e293b')
+                ax_bar.tick_params(colors='#94a3b8')
+                ax_bar.title.set_color('#f8fafc')
+                
+                categories = ["Gefüllt (Mid-Price)", "Nicht gefüllt (Fallback)"]
+                values = [fills, 100 - fills]
+                colors = ["#22c55e", "#ef4444"]
+                
+                bars = ax_bar.barh(categories, values, color=colors, height=0.5)
+                ax_bar.set_xlim(0, 100)
+                ax_bar.set_xlabel("Häufigkeit in %", color="#94a3b8")
+                ax_bar.set_title("Order-Ausführungsverteilung im Spread-Band")
+                
+                for bar in bars:
+                    width = bar.get_width()
+                    ax_bar.text(width + 2, bar.get_y() + bar.get_height()/2, f"{width}%", 
+                                va='center', ha='left', color='#f8fafc', fontweight='bold')
+                
+                st.pyplot(fig_bar)
+                
+                st.info(f"💡 **Fazit für Trader:** Durch Platzierung von Mid-Price Limit-Orders statt Market-Orders haben Sie im Schnitt **${realized_saving/ea_qty:,.2f} pro Kontrakt** an Slippage-Kosten eingespart. Bei den {100 - fills}% nicht ausgeführten Orders mussten Sie am Ende der {ea_wait} Minuten auf eine aggressive Market-Order ausweichen, um den Einstieg zu erzwingen, was dort zu den vollen Slippage-Kosten von ${c_spread*100:.2f} führte. Die Simulation zeigt: Geduld im Spread spart signifikant Kapital!")
 
     # -------------------------------------------------------------------------
     # SUB-TAB 4: LONG/SHORT EQUITY BASKET
