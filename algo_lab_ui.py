@@ -12,17 +12,19 @@ from execution_algo import ExecutionAlgoManager
 from arbitrage_lab import StatisticalArbitrageLab, calculate_black_scholes_delta, calculate_greeks, norm
 from alpaca_trader import is_alpaca_configured, get_account_info, place_order, get_positions
 from watchlist_manager import load_watchlist
+from synthetic_swap_builder import execute_synthetic_swap
 
 def render_algo_lab_tab():
     st.markdown('<div class="wl-banner"><h2>🔬 Quantitative Algo-Trading & Execution Lab</h2></div>', unsafe_allow_html=True)
     st.markdown("Testen Sie quantitative Handelsstrategien (Arbitrage, Paare) und führen Sie Orders kontrolliert mit Ausführungsalgorithmen aus.")
     
     # Sub-tabs inside Algo Lab
-    sub_tab1, sub_tab2, sub_tab3, sub_tab4 = st.tabs([
+    sub_tab1, sub_tab2, sub_tab3, sub_tab4, sub_tab5 = st.tabs([
         "🤖 Algorithmic Execution (OMS)",
         "📈 Statistical Arbitrage (Pairs)",
         "🎫 Option Delta-Hedging & Volatility Lab",
-        "⚖️ Long/Short Equity Basket"
+        "⚖️ Long/Short Equity Basket",
+        "🔄 Option Synthetic Swaps"
     ])
     
     # -------------------------------------------------------------------------
@@ -1182,3 +1184,140 @@ def render_algo_lab_tab():
                                             st.error(f"🔴 **{t}** ({side}): Fehler: {res.get('message')}")
             except Exception as e:
                 st.error(f"Fehler beim Laden des Screener-Caches: {e}")
+
+    # -------------------------------------------------------------------------
+    # SUB-TAB 5: OPTION SYNTHETIC SWAPS
+    # -------------------------------------------------------------------------
+    with sub_tab5:
+        st.subheader("Option Synthetic Swaps (Synthetic Stock)")
+        st.write("Bauen Sie synthetische Aktienpositionen auf, um Kapital zu sparen oder Leihgebühren zu vermeiden.")
+        st.write("Ein *Synthetic Long* (Call kaufen + Put verkaufen) verhält sich exakt wie ein Aktienkauf, benötigt aber nur einen Bruchteil des Kapitals. Ein *Synthetic Short* (Put kaufen + Call verkaufen) repliziert einen Leerverkauf, ohne Borrow-Kosten.")
+        
+        sw_col1, sw_col2, sw_col3 = st.columns(3)
+        with sw_col1:
+            sw_ticker = st.text_input("Underlying Ticker", value="SPY", key="sw_ticker_input").upper().strip()
+            sw_direction = st.selectbox("Richtung (Swap)", ["Long (Bullish)", "Short (Bearish)"], key="sw_dir_input")
+        with sw_col2:
+            sw_qty = st.number_input("Menge (Optionen-Sets)", min_value=1, value=1, step=1, key="sw_qty_input")
+            sw_strike_input = st.number_input("Custom Strike Price ($) [0 für ATM]", min_value=0.0, value=0.0, step=1.0, key="sw_strike_input")
+        with sw_col3:
+            sw_expiry_input = st.text_input("Custom Expiry (YYYY-MM-DD) [Leer für ~30 Tage]", value="", key="sw_expiry_input").strip()
+            
+        run_sw_analysis = st.button("📊 Payoff-Diagramm berechnen", key="run_sw_analysis_btn")
+        
+        if run_sw_analysis or sw_ticker:
+            with st.spinner("Lade Underlying-Daten für Payoff-Berechnung..."):
+                try:
+                    tk = yf.Ticker(sw_ticker)
+                    hist = tk.history(period="1d")
+                    if hist.empty:
+                        sw_s = 100.0
+                    else:
+                        sw_s = float(hist["Close"].iloc[-1])
+                        
+                    strike_val = sw_strike_input if sw_strike_input > 0 else float(round(sw_s))
+                    
+                    st.markdown("### 📈 Payoff-Profil bei Fälligkeit (Expiration Payoff)")
+                    
+                    # Compute option price estimates for graph
+                    T_years = 30.0 / 365.0
+                    r_val = 0.04
+                    iv_val = 0.40
+                    
+                    # Helper Black-Scholes pricing
+                    def get_bs_px(S, K, T, r, sigma, opt_type):
+                        if T <= 0:
+                            return max(0.0, S - K) if opt_type == "call" else max(0.0, K - S)
+                        d1 = (np.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
+                        d2 = d1 - sigma * np.sqrt(T)
+                        if opt_type == "call":
+                            return S * norm.cdf(d1) - K * np.exp(-r * T) * norm.cdf(d2)
+                        else:
+                            return K * np.exp(-r * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
+                            
+                    call_prem = get_bs_px(sw_s, strike_val, T_years, r_val, iv_val, "call")
+                    put_prem = get_bs_px(sw_s, strike_val, T_years, r_val, iv_val, "put")
+                    
+                    prices = np.linspace(strike_val * 0.8, strike_val * 1.2, 50)
+                    
+                    fig, ax = plt.subplots(figsize=(10, 4.5))
+                    fig.patch.set_facecolor('#0f172a')
+                    ax.set_facecolor('#1e293b')
+                    ax.tick_params(colors='#94a3b8')
+                    ax.xaxis.label.set_color('#94a3b8')
+                    ax.yaxis.label.set_color('#94a3b8')
+                    ax.title.set_color('#f8fafc')
+                    ax.grid(True, color='#334155', linestyle=':')
+                    
+                    if "Long" in sw_direction:
+                        # Long Call payoff: max(0, S_T - K) - Premium_Call
+                        # Short Put payoff: - (max(0, K - S_T) - Premium_Put) = Premium_Put - max(0, K - S_T)
+                        call_payoffs = [max(0, p - strike_val) - call_prem for p in prices]
+                        put_payoffs = [put_prem - max(0, strike_val - p) for p in prices]
+                        combined = [c + p for c, p in zip(call_payoffs, put_payoffs)]
+                        
+                        ax.plot(prices, combined, color="#00ffcc", linewidth=3, label="Kombiniertes Synthetic Long")
+                        ax.plot(prices, call_payoffs, color="#a855f7", linestyle="--", alpha=0.6, label="Long Call")
+                        ax.plot(prices, put_payoffs, color="#e11d48", linestyle="--", alpha=0.6, label="Short Put")
+                    else: # Short
+                        # Short Call payoff: Premium_Call - max(0, S_T - K)
+                        # Long Put payoff: max(0, K - S_T) - Premium_Put
+                        call_payoffs = [call_prem - max(0, p - strike_val) for p in prices]
+                        put_payoffs = [max(0, strike_val - p) - put_prem for p in prices]
+                        combined = [c + p for c, p in zip(call_payoffs, put_payoffs)]
+                        
+                        ax.plot(prices, combined, color="#f43f5e", linewidth=3, label="Kombiniertes Synthetic Short")
+                        ax.plot(prices, call_payoffs, color="#a855f7", linestyle="--", alpha=0.6, label="Short Call")
+                        ax.plot(prices, put_payoffs, color="#22c55e", linestyle="--", alpha=0.6, label="Long Put")
+                        
+                    ax.axhline(0, color="#f8fafc", linestyle=":", alpha=0.5)
+                    ax.axvline(sw_s, color="#e2e8f0", linestyle="--", label=f"Aktueller Kurs (${sw_s:.2f})")
+                    ax.set_ylabel("Payoff ($ pro Aktie)")
+                    ax.set_xlabel("Aktienpreis bei Verfall ($)")
+                    ax.set_title(f"Synthetic {sw_direction.split()[0]} Payoff-Profil")
+                    ax.legend(facecolor='#1e293b', labelcolor='#f8fafc')
+                    st.pyplot(fig)
+                    
+                    # Order Execution Section
+                    st.markdown("### 🚀 Swap-Ausführung")
+                    if not is_alpaca_configured():
+                        st.warning("Alpaca ist nicht konfiguriert. Synthetic Swap-Ausführung über Schnittstelle deaktiviert.")
+                    else:
+                        st.success("🟢 Alpaca-Konto verbunden. Order kann übermittelt werden.")
+                        
+                        confirm_swap = st.checkbox("Ich bestätige, dass ich diesen Synthetic Swap über Alpaca ausführen möchte.", value=False, key="sw_confirm_checkbox")
+                        
+                        if st.button("🚀 Synthetic Swap Order an Alpaca senden", key="sw_submit_btn"):
+                            if not confirm_swap:
+                                st.error("Bitte bestätigen Sie die Orderausführung.")
+                            else:
+                                with st.spinner("Sende Legs an Alpaca..."):
+                                    import io
+                                    from contextlib import redirect_stdout
+                                    
+                                    # Map direction
+                                    dir_mapped = "long" if "Long" in sw_direction else "short"
+                                    strike_mapped = strike_val
+                                    expiry_mapped = sw_expiry_input if sw_expiry_input else None
+                                    
+                                    # Execute and capture stdout
+                                    f_output = io.StringIO()
+                                    with redirect_stdout(f_output):
+                                        success = execute_synthetic_swap(
+                                            ticker=sw_ticker,
+                                            direction=dir_mapped,
+                                            qty=sw_qty,
+                                            strike=strike_mapped,
+                                            expiry=expiry_mapped
+                                        )
+                                    logs = f_output.getvalue()
+                                    
+                                    st.markdown("#### 📜 Ausführungsprotokoll")
+                                    st.code(logs)
+                                    
+                                    if success:
+                                        st.success("🟢 Synthetic Swap erfolgreich ausgeführt! Beide Legs wurden an Alpaca übergeben.")
+                                    else:
+                                        st.error("🔴 Fehler oder unvollständige Ausführung des Swaps. Siehe Ausführungsprotokoll.")
+                except Exception as e:
+                    st.error(f"Fehler bei Analyse: {e}")
