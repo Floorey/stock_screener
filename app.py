@@ -23,6 +23,7 @@ from options_ui import render_options_tab
 from cashflow_ui import render_cashflow_tab
 from performance_ui import render_performance_tab
 from algo_lab_ui import render_algo_lab_tab
+from bloomberg_ui import render_bloomberg_tab
 from risk_manager import (
     fetch_portfolio_positions,
     calculate_portfolio_var,
@@ -237,7 +238,8 @@ if "macro_futures_df" in st.session_state and not st.session_state["macro_future
     )
 
 # Initialize Tabs
-tab1, tab_wl, tab_opt, tab_perf, tab2, tab_trade, tab_cash, tab_strat, tab_risk, tab_algo, tab3 = st.tabs([
+tab_bbg, tab1, tab_wl, tab_opt, tab_perf, tab2, tab_trade, tab_cash, tab_strat, tab_risk, tab_algo, tab3 = st.tabs([
+    "📟 Bloomberg Terminal",
     "🎯 Screener Dashboard", 
     "⭐ Watchlist Manager", 
     "🎫 Options-Screener",
@@ -250,6 +252,12 @@ tab1, tab_wl, tab_opt, tab_perf, tab2, tab_trade, tab_cash, tab_strat, tab_risk,
     "🔬 Algo-Trading Testlab",
     "📄 PDF Finanzbericht Analyzer"
 ])
+
+# ----------------------------------------------------
+# TAB BBG: BLOOMBERG TERMINAL
+# ----------------------------------------------------
+with tab_bbg:
+    render_bloomberg_tab()
 
 # ----------------------------------------------------
 # TAB 1: SCREENER DASHBOARD
