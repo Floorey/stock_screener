@@ -4,6 +4,7 @@ import yfinance as yf
 import datetime
 import io
 import time
+import re
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -19,6 +20,12 @@ MOCK_PORTFOLIO = [
     {"symbol": "BTC-USD", "qty": 0.75, "avg_entry_price": 58000.00, "name": "Bitcoin USD"},
     {"symbol": "GC=F", "qty": 10.0, "avg_entry_price": 2100.00, "name": "Gold Futures"}
 ]
+
+def clean_html(html_str):
+    """Strips newlines and multiple spaces from HTML to prevent Streamlit's markdown parser from breaking."""
+    h = html_str.replace("\n", " ")
+    h = re.sub(r'\s+', ' ', h)
+    return h.strip()
 
 def format_val(val, fmt_type="decimal", suffix=""):
     """Safely formats values fetched from yfinance, handling None values gracefully."""
@@ -362,7 +369,7 @@ def make_bloomberg_table(df, total_equity):
     html += '</tr>'
     
     html += '</tbody></table>'
-    return html
+    return clean_html(html)
 
 def make_bloomberg_macro_table(macro_data):
     """Formats global market assets table in clean retro dashboard HTML."""
@@ -402,7 +409,7 @@ def make_bloomberg_macro_table(macro_data):
         html += '</tr>'
         
     html += '</tbody></table>'
-    return html
+    return clean_html(html)
 
 def make_bloomberg_news_html(news_items):
     """Formats financial news feeds like retro scrolling ticker logs."""
@@ -410,7 +417,7 @@ def make_bloomberg_news_html(news_items):
     if not news_items:
         html += '<div class="bloomberg-amber-text">> NO NEWS HEADLINES CURRENTLY LOADED</div>'
         html += '</div>'
-        return html
+        return clean_html(html)
     for item in news_items:
         title = item["Titel"].upper()
         pub = item["Herausgeber"].upper()
@@ -426,7 +433,7 @@ def make_bloomberg_news_html(news_items):
         html += f'<a href="{link}" target="_blank" class="bloomberg-white-text" style="text-decoration: none;"><b>{title}</b></a>'
         html += f'</div>'
     html += '</div>'
-    return html
+    return clean_html(html)
 
 def fetch_heatmap_data(mode="mega", screener_df=None):
     """Fetches and processes performance data for the heatmaps, implementing batch limits to prevent rate blocks."""
@@ -518,16 +525,14 @@ def make_heatmap_html(ticker_data):
             
         sign = "+" if pct > 0 else ""
         
-        html += f"""
-        <div style="background-color: {bg_color}; color: {text_color}; border-radius: 4px; padding: 10px; text-align: center; border: 1px solid #111; box-shadow: inset 0 0 5px rgba(0,0,0,0.5);">
-            <div style="font-size: 1.05rem; font-weight: bold;">{sym}</div>
-            <div style="font-size: 0.8rem; margin: 3px 0;">${price:,.2f}</div>
-            <div style="font-size: 0.85rem; font-weight: bold;">{sign}{pct:.2f}%</div>
-        </div>
-        """
+        html += f'<div style="background-color: {bg_color}; color: {text_color}; border-radius: 4px; padding: 10px; text-align: center; border: 1px solid #111; box-shadow: inset 0 0 5px rgba(0,0,0,0.5);">'
+        html += f'<div style="font-size: 1.05rem; font-weight: bold;">{sym}</div>'
+        html += f'<div style="font-size: 0.8rem; margin: 3px 0;">${price:,.2f}</div>'
+        html += f'<div style="font-size: 0.85rem; font-weight: bold;">{sign}{pct:.2f}%</div>'
+        html += '</div>'
         
     html += '</div>'
-    return html
+    return clean_html(html)
 
 def render_bloomberg_tab():
     """Main rendering entrypoint that manages state, routes commands, and draws the terminal layout."""
@@ -646,7 +651,7 @@ def render_bloomberg_tab():
     """
     
     st.markdown('<div class="bloomberg-title-bar"><span>📟 BLOOMBERG PROFESSIONAL SERVICES</span><span><kbd>HELP</kbd> FOR MENU</span></div>', unsafe_allow_html=True)
-    st.markdown(clocks_html, unsafe_allow_html=True)
+    st.markdown(clean_html(clocks_html), unsafe_allow_html=True)
     
     # Bloomberg Command Input Line
     col_cmd, col_btn = st.columns([3.5, 8.5])
@@ -771,43 +776,43 @@ def render_bloomberg_tab():
         col_s1, col_s2, col_s3, col_s4 = st.columns(4)
         
         with col_s1:
-            st.markdown(f"""
+            st.markdown(clean_html(f"""
             <div class="bloomberg-stat-box">
                 <span class="bloomberg-gray-text" style="font-size:0.75rem; font-weight:bold;">TOTAL EQUITY VALUE</span><br>
                 <span class="bloomberg-white-text" style="font-size:1.5rem; font-weight:bold;">${portfolio_value:,.2f}</span>
             </div>
-            """, unsafe_allow_html=True)
+            """), unsafe_allow_html=True)
             
         with col_s2:
-            st.markdown(f"""
+            st.markdown(clean_html(f"""
             <div class="bloomberg-stat-box">
                 <span class="bloomberg-gray-text" style="font-size:0.75rem; font-weight:bold;">CASH / BUYING POWER</span><br>
                 <span class="bloomberg-cyan-text" style="font-size:1.25rem; font-weight:bold;">${cash:,.2f}</span><br>
                 <span class="bloomberg-gray-text" style="font-size:0.7rem;">BP: ${buying_power:,.2f}</span>
             </div>
-            """, unsafe_allow_html=True)
+            """), unsafe_allow_html=True)
             
         with col_s3:
             pnl_color_class = "bloomberg-green-text" if total_pnl >= 0 else "bloomberg-red-text"
             pnl_sign = "+" if total_pnl >= 0 else ""
-            st.markdown(f"""
+            st.markdown(clean_html(f"""
             <div class="bloomberg-stat-box">
                 <span class="bloomberg-gray-text" style="font-size:0.75rem; font-weight:bold;">UNREALIZED P&L</span><br>
                 <span class="{pnl_color_class}" style="font-size:1.25rem; font-weight:bold;">{pnl_sign}${total_pnl:,.2f}</span><br>
                 <span class="{pnl_color_class}" style="font-size:0.8rem; font-weight:bold;">{pnl_sign}{total_pnl_pct:.2f}%</span>
             </div>
-            """, unsafe_allow_html=True)
+            """), unsafe_allow_html=True)
             
         with col_s4:
             day_pnl_class = "bloomberg-green-text" if day_pnl >= 0 else "bloomberg-red-text"
             day_pnl_sign = "+" if day_pnl >= 0 else ""
-            st.markdown(f"""
+            st.markdown(clean_html(f"""
             <div class="bloomberg-stat-box">
                 <span class="bloomberg-gray-text" style="font-size:0.75rem; font-weight:bold;">DAILY CHANGE</span><br>
                 <span class="{day_pnl_class}" style="font-size:1.25rem; font-weight:bold;">{day_pnl_sign}${day_pnl:,.2f}</span><br>
                 <span class="{day_pnl_class}" style="font-size:0.8rem; font-weight:bold;">{day_pnl_sign}{day_pnl_pct:.2f}%</span>
             </div>
-            """, unsafe_allow_html=True)
+            """), unsafe_allow_html=True)
             
         st.markdown(f"<div style='text-align: right; font-size: 0.8rem; margin: 8px 0;' class='bloomberg-amber-text'>MODE: {pnl_status_text}</div>", unsafe_allow_html=True)
         
@@ -851,7 +856,7 @@ def render_bloomberg_tab():
                     
                 st.markdown("<br>", unsafe_allow_html=True)
                 # Static system box
-                st.markdown("""
+                st.markdown(clean_html("""
                 <div class="bloomberg-box">
                     <h5 class="bloomberg-amber-text" style="margin:0 0 6px 0;">[SYSTEM] ECONOMIC NOTES</h5>
                     <p style="font-size:0.8rem; line-height:1.4; margin:0;" class="bloomberg-white-text">
@@ -861,7 +866,7 @@ def render_bloomberg_tab():
                         ● Crypto markets consolidated with reduced momentum levels.
                     </p>
                 </div>
-                """, unsafe_allow_html=True)
+                """), unsafe_allow_html=True)
         else:
             st.error("Es konnten keine Makrodaten abgerufen werden.")
             
@@ -957,7 +962,7 @@ def render_bloomberg_tab():
             </p>
         </div>
         """
-        st.markdown(help_html, unsafe_allow_html=True)
+        st.markdown(clean_html(help_html), unsafe_allow_html=True)
         
     elif screen == "TICKER":
         ticker = st.session_state["bbg_ticker"]
@@ -971,7 +976,7 @@ def render_bloomberg_tab():
                 info = None
                 
         if not info or len(info) <= 5:
-            st.markdown(f"""
+            warning_html = f"""
             <div style="background-color: #110000; border: 2px solid #ff3333; padding: 20px; border-radius: 4px; font-family: 'Courier New', Courier, monospace; text-align: center; margin: 20px 0;">
                 <h3 class="bloomberg-red-text">🚨 ERROR: SECURITY NOT FOUND</h3>
                 <p class="bloomberg-white-text" style="font-size: 1.1rem; margin: 10px 0;">
@@ -981,7 +986,8 @@ def render_bloomberg_tab():
                     Please input a valid US Equity ticker like AAPL, MSFT, TSLA, NVDA or return to PORT via command.
                 </p>
             </div>
-            """, unsafe_allow_html=True)
+            """
+            st.markdown(clean_html(warning_html), unsafe_allow_html=True)
         else:
             company_name = info.get("longName", info.get("shortName", ticker))
             sector = info.get("sector", "N/A")
@@ -994,7 +1000,7 @@ def render_bloomberg_tab():
             pnl_color = "bloomberg-green-text" if change >= 0 else "bloomberg-red-text"
             pnl_sign = "+" if change >= 0 else ""
             
-            st.markdown(f"""
+            profile_html = f"""
             <div class="bloomberg-box">
                 <div style="display:flex; justify-content:space-between; flex-wrap:wrap;">
                     <div>
@@ -1003,11 +1009,12 @@ def render_bloomberg_tab():
                     </div>
                     <div style="text-align: right;">
                         <span style="font-size:1.5rem; font-weight:bold;" class="bloomberg-white-text">${price:,.2f}</span><br>
-                        <span class="{pnl_color}" style="font-size:1.05rem; font-weight:bold;">{pnl_sign}${change:,.2f} ({pnl_sign}{change_pct:.2f})</span>
+                        <span class="{pnl_color}" style="font-size:1.05rem; font-weight:bold;">{pnl_sign}${change:,.2f} ({pnl_sign}{change_pct:.2f}%)</span>
                     </div>
                 </div>
             </div>
-            """, unsafe_allow_html=True)
+            """
+            st.markdown(clean_html(profile_html), unsafe_allow_html=True)
             
             # Key Ratios Grid
             col_d1, col_d2, col_d3 = st.columns(3)
@@ -1035,7 +1042,7 @@ def render_bloomberg_tab():
                     <tr><td class="bloomberg-gray-text">BETA (3Y)</td><td class="bloomberg-white-text" style="text-align: right;">{format_val(beta)}</td></tr>
                 </table>
                 """
-                st.markdown(mkt_html, unsafe_allow_html=True)
+                st.markdown(clean_html(mkt_html), unsafe_allow_html=True)
                 
             with col_d2:
                 st.markdown("<h4 class='bloomberg-cyan-text'>[VAL] VALUATION FEEDS</h4>", unsafe_allow_html=True)
@@ -1058,7 +1065,7 @@ def render_bloomberg_tab():
                     <tr><td class="bloomberg-gray-text">DIV YIELD</td><td class="bloomberg-white-text" style="text-align: right;">{format_val(dy, "percent_raw")}</td></tr>
                 </table>
                 """
-                st.markdown(val_html, unsafe_allow_html=True)
+                st.markdown(clean_html(val_html), unsafe_allow_html=True)
                 
             with col_d3:
                 st.markdown("<h4 class='bloomberg-cyan-text'>[FIN] BALANCE & MARGINS</h4>", unsafe_allow_html=True)
@@ -1081,7 +1088,7 @@ def render_bloomberg_tab():
                     <tr><td class="bloomberg-gray-text">OPERATING MARGIN</td><td class="bloomberg-white-text" style="text-align: right;">{format_val(om, "percent_raw")}</td></tr>
                 </table>
                 """
-                st.markdown(fin_html, unsafe_allow_html=True)
+                st.markdown(clean_html(fin_html), unsafe_allow_html=True)
                 
             st.markdown("<br>", unsafe_allow_html=True)
             
