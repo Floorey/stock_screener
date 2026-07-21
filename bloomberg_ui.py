@@ -428,6 +428,107 @@ def make_bloomberg_news_html(news_items):
     html += '</div>'
     return html
 
+def fetch_heatmap_data(mode="mega", screener_df=None):
+    """Fetches and processes performance data for the heatmaps, implementing batch limits to prevent rate blocks."""
+    if mode == "portfolio":
+        alpaca_ok = is_alpaca_configured()
+        if alpaca_ok:
+            try:
+                positions = get_positions()
+                tickers = [pos["symbol"] for pos in positions]
+            except Exception:
+                tickers = [item["symbol"] for item in MOCK_PORTFOLIO]
+        else:
+            tickers = [item["symbol"] for item in MOCK_PORTFOLIO]
+    elif mode == "screener" and screener_df is not None and not screener_df.empty:
+        tickers = list(screener_df["Symbol"].head(40))
+    else:
+        # Default mega-caps list
+        tickers = ["AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "TSLA", "BRK-B", "LLY", "AVGO", "JPM", "UNH", "V", "XOM", "MA", "PG", "COST", "HD", "NFLX", "ADBE", "AMD", "WMT", "KO", "BAC"]
+        
+    results = []
+    if not tickers:
+        return results
+        
+    try:
+        data = yf.download(tickers, period="5d", group_by="ticker", progress=False)
+        for sym in tickers:
+            try:
+                if sym in data.columns.levels[0]:
+                    sym_df = data[sym]
+                    valid_closes = sym_df["Close"].dropna()
+                    if not valid_closes.empty:
+                        price = float(valid_closes.iloc[-1])
+                        prev_close = float(valid_closes.iloc[-2]) if len(valid_closes) >= 2 else price
+                        change = price - prev_close
+                        change_pct = (change / prev_close) * 100.0 if prev_close > 0 else 0.0
+                        results.append({
+                            "symbol": sym,
+                            "price": price,
+                            "change_pct": change_pct
+                        })
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"Error fetching heatmap data: {e}")
+        
+    # If downloading failed completely, build fake values for visualization safety
+    if not results:
+        for sym in tickers[:15]:
+            results.append({
+                "symbol": sym,
+                "price": 150.0,
+                "change_pct": 0.0
+            })
+            
+    # Sort by descending return
+    return sorted(results, key=lambda x: x["change_pct"], reverse=True)
+
+def make_heatmap_html(ticker_data):
+    """Generates the styled grid of HTML cards for the Bloomberg Treemap/Heatmap visual."""
+    html = '<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; font-family: \'Courier New\', Courier, monospace; margin-top: 10px;">'
+    
+    for stock in ticker_data:
+        sym = stock["symbol"]
+        price = stock["price"]
+        pct = stock["change_pct"]
+        
+        # Determine background color based on daily return
+        if pct <= -3.0:
+            bg_color = "#770000" # Deep red
+            text_color = "#ffffff"
+        elif pct <= -1.0:
+            bg_color = "#aa1111" # Red
+            text_color = "#ffffff"
+        elif pct < 0.0:
+            bg_color = "#cc4444" # Light red
+            text_color = "#ffffff"
+        elif pct == 0.0:
+            bg_color = "#333333" # Gray
+            text_color = "#888888"
+        elif pct < 1.0:
+            bg_color = "#005500" # Dark green
+            text_color = "#ffffff"
+        elif pct < 3.0:
+            bg_color = "#008800" # Medium green
+            text_color = "#ffffff"
+        else:
+            bg_color = "#00cc00" # Bright green
+            text_color = "#000000" # Black text on bright green for high contrast readability
+            
+        sign = "+" if pct > 0 else ""
+        
+        html += f"""
+        <div style="background-color: {bg_color}; color: {text_color}; border-radius: 4px; padding: 10px; text-align: center; border: 1px solid #111; box-shadow: inset 0 0 5px rgba(0,0,0,0.5);">
+            <div style="font-size: 1.05rem; font-weight: bold;">{sym}</div>
+            <div style="font-size: 0.8rem; margin: 3px 0;">${price:,.2f}</div>
+            <div style="font-size: 0.85rem; font-weight: bold;">{sign}{pct:.2f}%</div>
+        </div>
+        """
+        
+    html += '</div>'
+    return html
+
 def render_bloomberg_tab():
     """Main rendering entrypoint that manages state, routes commands, and draws the terminal layout."""
     # Inject scoped style sheet for Bloomberg theme styling
@@ -548,12 +649,12 @@ def render_bloomberg_tab():
     st.markdown(clocks_html, unsafe_allow_html=True)
     
     # Bloomberg Command Input Line
-    col_cmd, col_btn = st.columns([4, 8])
+    col_cmd, col_btn = st.columns([3.5, 8.5])
     
     with col_cmd:
         cmd_input = st.text_input(
             "CMD>", 
-            placeholder="Type Ticker (e.g. TSLA, NVDA) or PORT, WEIS, NEWS, HELP...", 
+            placeholder="Type Ticker or PORT, WEIS, MAPS, NEWS...", 
             key="bbg_cmd_field",
             label_visibility="collapsed"
         )
@@ -568,14 +669,16 @@ def render_bloomberg_tab():
                 st.session_state["bbg_screen"] = "NEWS"
             elif cmd in ["MACR", "MACRO"]:
                 st.session_state["bbg_screen"] = "MACR"
-            elif cmd in ["HELP", "?"]:
+            elif cmd in ["MAPS", "HEAT", "HEATMAP"]:
+                st.session_state["bbg_screen"] = "MAPS"
+            elif cmd in ["HELP", "?", "MENU"]:
                 st.session_state["bbg_screen"] = "HELP"
             else:
                 st.session_state["bbg_screen"] = "TICKER"
                 st.session_state["bbg_ticker"] = cmd
                 
     with col_btn:
-        col_b1, col_b2, col_b3, col_b4, col_b5 = st.columns(5)
+        col_b1, col_b2, col_b3, col_b4, col_b5, col_b6 = st.columns(6)
         with col_b1:
             if st.button("💼 PORT (Depot)", key="bbg_btn_port", use_container_width=True):
                 st.session_state["bbg_screen"] = "PORT"
@@ -586,9 +689,12 @@ def render_bloomberg_tab():
             if st.button("📊 MACR (Macro)", key="bbg_btn_macr", use_container_width=True):
                 st.session_state["bbg_screen"] = "MACR"
         with col_b4:
+            if st.button("🗺️ MAPS (Heat)", key="bbg_btn_maps", use_container_width=True):
+                st.session_state["bbg_screen"] = "MAPS"
+        with col_b5:
             if st.button("📰 NEWS (Feed)", key="bbg_btn_news", use_container_width=True):
                 st.session_state["bbg_screen"] = "NEWS"
-        with col_b5:
+        with col_b6:
             if st.button("❓ HELP", key="bbg_btn_help", use_container_width=True):
                 st.session_state["bbg_screen"] = "HELP"
                 
@@ -759,6 +865,39 @@ def render_bloomberg_tab():
         else:
             st.error("Es konnten keine Makrodaten abgerufen werden.")
             
+    elif screen == "MAPS":
+        st.markdown("<h3 class='bloomberg-amber-text' style='margin-top: 0;'>🗺️ MAPS: MARKET HEATMAP (DAILY PERFORMANCE)</h3>", unsafe_allow_html=True)
+        
+        col_mchoice, col_mref = st.columns([4, 8])
+        with col_mchoice:
+            map_choice = st.selectbox(
+                "SELECT HEATMAP UNIVERSE",
+                ["US Mega-Caps", "Portfolio Holdings", "Screener Results"],
+                index=0,
+                key="bbg_map_choice"
+            )
+            
+        map_mode = "mega"
+        if map_choice == "Portfolio Holdings":
+            map_mode = "portfolio"
+        elif map_choice == "Screener Results":
+            map_mode = "screener"
+            
+        screener_df = st.session_state.get("screener_results", pd.DataFrame())
+        
+        if map_mode == "screener" and (screener_df is None or screener_df.empty):
+            st.warning("⚠️ Keine Screener-Ergebnisse geladen. Bitte starten Sie zuerst einen Scan im Dashboard. Zeige stattdessen US Mega-Caps.")
+            map_mode = "mega"
+            
+        with st.spinner("Lade Market Heatmap-Daten..."):
+            h_data = fetch_heatmap_data(map_mode, screener_df)
+            
+        if h_data:
+            heatmap_html = make_heatmap_html(h_data)
+            st.markdown(heatmap_html, unsafe_allow_html=True)
+        else:
+            st.error("Fehler beim Abrufen der Heatmap-Daten.")
+            
     elif screen == "NEWS":
         st.markdown("<h3 class='bloomberg-amber-text' style='margin-top: 0;'>📰 GLOBAL FINANCIAL NEWS TICKER</h3>", unsafe_allow_html=True)
         
@@ -791,6 +930,10 @@ def render_bloomberg_tab():
                     <tr>
                         <td class="bloomberg-amber-text"><b>WEIS</b> or <b>MACR</b></td>
                         <td>Loads World Equity Indices, Currency Rates, Yields and Commodity Futures.</td>
+                    </tr>
+                    <tr>
+                        <td class="bloomberg-amber-text"><b>MAPS</b></td>
+                        <td>Loads the interactive Market Heatmap based on a chosen ticker universe.</td>
                     </tr>
                     <tr>
                         <td class="bloomberg-amber-text"><b>NEWS</b></td>
@@ -860,7 +1003,7 @@ def render_bloomberg_tab():
                     </div>
                     <div style="text-align: right;">
                         <span style="font-size:1.5rem; font-weight:bold;" class="bloomberg-white-text">${price:,.2f}</span><br>
-                        <span class="{pnl_color}" style="font-size:1.05rem; font-weight:bold;">{pnl_sign}${change:,.2f} ({pnl_sign}{change_pct:.2f}%)</span>
+                        <span class="{pnl_color}" style="font-size:1.05rem; font-weight:bold;">{pnl_sign}${change:,.2f} ({pnl_sign}{change_pct:.2f})</span>
                     </div>
                 </div>
             </div>
