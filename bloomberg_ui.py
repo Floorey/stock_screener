@@ -10,6 +10,8 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from alpaca_trader import is_alpaca_configured, get_positions, get_account_info
 from macro_fetcher import fetch_company_news
+from execution_algo import ExecutionAlgoManager
+from pairs_tracker import load_active_pairs, get_pair_realtime_metrics
 
 MOCK_PORTFOLIO = [
     {"symbol": "AAPL", "qty": 100.0, "avg_entry_price": 175.50, "name": "Apple Inc."},
@@ -676,6 +678,8 @@ def render_bloomberg_tab():
                 st.session_state["bbg_screen"] = "MACR"
             elif cmd in ["MAPS", "HEAT", "HEATMAP"]:
                 st.session_state["bbg_screen"] = "MAPS"
+            elif cmd in ["ALGO", "OMS", "RUNNING", "EXEC", "LOGS"]:
+                st.session_state["bbg_screen"] = "ALGO"
             elif cmd in ["HELP", "?", "MENU"]:
                 st.session_state["bbg_screen"] = "HELP"
             else:
@@ -683,7 +687,7 @@ def render_bloomberg_tab():
                 st.session_state["bbg_ticker"] = cmd
                 
     with col_btn:
-        col_b1, col_b2, col_b3, col_b4, col_b5, col_b6 = st.columns(6)
+        col_b1, col_b2, col_b3, col_b4, col_b5, col_b6, col_b7 = st.columns(7)
         with col_b1:
             if st.button("💼 PORT (Depot)", key="bbg_btn_port", use_container_width=True):
                 st.session_state["bbg_screen"] = "PORT"
@@ -700,6 +704,9 @@ def render_bloomberg_tab():
             if st.button("📰 NEWS (Feed)", key="bbg_btn_news", use_container_width=True):
                 st.session_state["bbg_screen"] = "NEWS"
         with col_b6:
+            if st.button("🤖 ALGO (OMS)", key="bbg_btn_algo", use_container_width=True):
+                st.session_state["bbg_screen"] = "ALGO"
+        with col_b7:
             if st.button("❓ HELP", key="bbg_btn_help", use_container_width=True):
                 st.session_state["bbg_screen"] = "HELP"
                 
@@ -945,6 +952,10 @@ def render_bloomberg_tab():
                         <td>Retrieves top global market news headlines from real-time feeds.</td>
                     </tr>
                     <tr>
+                        <td class="bloomberg-amber-text"><b>ALGO</b> or <b>OMS</b></td>
+                        <td>Loads the Order Management System displaying live algorithm slices (TWAP/VWAP) and active Pairs trades.</td>
+                    </tr>
+                    <tr>
                         <td class="bloomberg-amber-text"><b>[TICKER]</b></td>
                         <td>Type any stock symbol (e.g. <b>AAPL</b>, <b>NVDA</b>, <b>TSLA</b>) to open the profile details page.</td>
                     </tr>
@@ -963,7 +974,167 @@ def render_bloomberg_tab():
         </div>
         """
         st.markdown(clean_html(help_html), unsafe_allow_html=True)
+
+    elif screen == "ALGO":
+        st.markdown("<h3 class='bloomberg-amber-text' style='margin-top: 0;'>🤖 ALGO-MONITOR: ACTIVE QUANTITATIVE LOGS & OMS</h3>", unsafe_allow_html=True)
         
+        # Section 1: Algorithmic Order Management System (TWAP/VWAP)
+        st.markdown("<div style='background-color: #0c0c0c; border: 1px solid #333; padding: 10px; border-radius: 4px; font-family: \"Courier New\", Courier, monospace; margin-bottom: 15px;'>"
+                    "<span style='color: #00ffff; font-weight: bold;'>[1] TWAP / VWAP ORDER EXECUTION SCHEDULER LOGS (OMS)</span>"
+                    "</div>", unsafe_allow_html=True)
+        
+        try:
+            manager = ExecutionAlgoManager()
+            past_logs = manager.get_logs()
+        except Exception as e:
+            st.error(f"Error loading ExecutionAlgoManager: {e}")
+            past_logs = []
+            
+        if not past_logs:
+            st.markdown("<div style='color: #ff3333; font-family: \"Courier New\", Courier, monospace; margin-bottom: 20px;'>NO ACTIVE OR HISTORICAL OMS RUNS FOUND.</div>", unsafe_allow_html=True)
+        else:
+            # Show logs in a beautiful Bloomberg table
+            flat_logs = []
+            for log in reversed(past_logs):
+                flat_logs.append({
+                    "ID": log.get("execution_id", "N/A"),
+                    "Ticker": log.get("ticker", "N/A"),
+                    "Side": log.get("side", "N/A"),
+                    "Qty": log.get("total_qty", 0),
+                    "Filled": log.get("filled_qty", 0),
+                    "Algo": log.get("algo_type", "N/A"),
+                    "Avg Price": f"${log.get('average_price', 0.0):.2f}",
+                    "Status": log.get("status", "N/A"),
+                    "Start Time": log.get("start_time", "N/A")
+                })
+            
+            df_logs = pd.DataFrame(flat_logs)
+            
+            log_table_html = f"""
+            <table class="bloomberg-table" style="margin-bottom: 25px;">
+                <thead>
+                    <tr>
+                        <th style="text-align: left;">EXECUTION ID</th>
+                        <th style="text-align: left;">TICKER</th>
+                        <th style="text-align: left;">SIDE</th>
+                        <th style="text-align: left;">ALGO</th>
+                        <th style="text-align: right;">TOTAL QTY</th>
+                        <th style="text-align: right;">FILLED QTY</th>
+                        <th style="text-align: right;">AVG PRICE</th>
+                        <th style="text-align: left;">STATUS</th>
+                        <th style="text-align: left;">START TIME</th>
+                    </tr>
+                </thead>
+                <tbody>
+            """
+            for _, row in df_logs.iterrows():
+                status_color = "bloomberg-green-text" if row["Status"] == "Completed" else ("bloomberg-amber-text" if row["Status"] == "Running" else "bloomberg-red-text")
+                side_color = "bloomberg-green-text" if row["Side"] == "BUY" else "bloomberg-red-text"
+                
+                log_table_html += f"""
+                    <tr>
+                        <td class="bloomberg-white-text">{row["ID"]}</td>
+                        <td class="bloomberg-cyan-text">{row["Ticker"]}</td>
+                        <td class="{side_color}">{row["Side"]}</td>
+                        <td class="bloomberg-white-text">{row["Algo"]}</td>
+                        <td class="bloomberg-white-text" style="text-align: right;">{row["Qty"]}</td>
+                        <td class="bloomberg-white-text" style="text-align: right;">{row["Filled"]}</td>
+                        <td class="bloomberg-white-text" style="text-align: right;">{row["Avg Price"]}</td>
+                        <td class="{status_color}">{row["Status"]}</td>
+                        <td class="bloomberg-gray-text">{row["Start Time"]}</td>
+                    </tr>
+                """
+            log_table_html += "</tbody></table>"
+            st.markdown(clean_html(log_table_html), unsafe_allow_html=True)
+            
+        # Section 2: Statistical Arbitrage Pairs Positions
+        st.markdown("<br><div style='background-color: #0c0c0c; border: 1px solid #333; padding: 10px; border-radius: 4px; font-family: \"Courier New\", Courier, monospace; margin-bottom: 15px;'>"
+                    "<span style='color: #00ffff; font-weight: bold;'>[2] STATISTICAL ARBITRAGE ACTIVE PAIRS POSITIONS</span>"
+                    "</div>", unsafe_allow_html=True)
+        
+        try:
+            active_pairs = load_active_pairs()
+            live_pos = get_positions() if is_alpaca_configured() else []
+        except Exception as e:
+            st.error(f"Error loading Pairs Tracker: {e}")
+            active_pairs = []
+            live_pos = []
+            
+        if not active_pairs:
+            st.markdown("<div style='color: #ff3333; font-family: \"Courier New\", Courier, monospace;'>NO ACTIVE COINTEGRATED PAIRS DETECTED.</div>", unsafe_allow_html=True)
+        else:
+            pairs_data = []
+            pos_pnl = {p["symbol"]: float(p.get("unrealized_pl", 0.0)) for p in live_pos}
+            for pair in active_pairs:
+                try:
+                    metrics = get_pair_realtime_metrics(pair, live_pos)
+                    ticker_a = pair.get("ticker_a")
+                    ticker_b = pair.get("ticker_b")
+                    pnl_val = pos_pnl.get(ticker_a, 0.0) + pos_pnl.get(ticker_b, 0.0)
+                    pnl_color = "bloomberg-green-text" if pnl_val >= 0 else "bloomberg-red-text"
+                    pnl_sign = "+" if pnl_val >= 0 else ""
+                    
+                    pairs_data.append({
+                        "ID": pair.get("pair_id", "N/A"),
+                        "Leg A": f"{ticker_a} ({pair.get('qty_a')})",
+                        "Leg B": f"{ticker_b} ({pair.get('qty_b')})",
+                        "Entry Z": f"{pair.get('entry_z'):.2f}",
+                        "Current Z": f"{metrics.get('current_z', 0.0):.2f}",
+                        "Hedge Ratio": f"{pair.get('entry_hr'):.4f}",
+                        "PnL": f"<span class='{pnl_color}'>{pnl_sign}${pnl_val:,.2f}</span>",
+                        "Status": "ACTIVE" if metrics.get("is_active") else "INACTIVE",
+                        "Timestamp": pair.get("timestamp", "N/A")
+                    })
+                except Exception as e:
+                    pairs_data.append({
+                        "ID": pair.get("pair_id", "N/A"),
+                        "Leg A": pair.get("ticker_a"),
+                        "Leg B": pair.get("ticker_b"),
+                        "Entry Z": f"{pair.get('entry_z'):.2f}",
+                        "Current Z": "N/A",
+                        "Hedge Ratio": f"{pair.get('entry_hr'):.4f}",
+                        "PnL": "N/A",
+                        "Status": f"ERROR: {str(e)[:20]}",
+                        "Timestamp": pair.get("timestamp", "N/A")
+                    })
+                    
+            # Draw pairs in a nice table
+            pairs_table_html = f"""
+            <table class="bloomberg-table">
+                <thead>
+                    <tr>
+                        <th style="text-align: left;">PAIR ID</th>
+                        <th style="text-align: left;">LEG A (QTY)</th>
+                        <th style="text-align: left;">LEG B (QTY)</th>
+                        <th style="text-align: right;">HEDGE RATIO</th>
+                        <th style="text-align: right;">ENTRY Z</th>
+                        <th style="text-align: right;">CURRENT Z</th>
+                        <th style="text-align: right;">UNREALIZED PnL</th>
+                        <th style="text-align: left;">STATUS</th>
+                        <th style="text-align: left;">START TIME</th>
+                    </tr>
+                </thead>
+                <tbody>
+            """
+            for row in pairs_data:
+                status_color = "bloomberg-green-text" if row["Status"] == "ACTIVE" else "bloomberg-red-text"
+                
+                pairs_table_html += f"""
+                    <tr>
+                        <td class="bloomberg-white-text">{row["ID"]}</td>
+                        <td class="bloomberg-cyan-text">{row["Leg A"]}</td>
+                        <td class="bloomberg-cyan-text">{row["Leg B"]}</td>
+                        <td class="bloomberg-white-text" style="text-align: right;">{row["Hedge Ratio"]}</td>
+                        <td class="bloomberg-white-text" style="text-align: right;">{row["Entry Z"]}</td>
+                        <td class="bloomberg-white-text" style="text-align: right;">{row["Current Z"]}</td>
+                        <td class="bloomberg-white-text" style="text-align: right;">{row["PnL"]}</td>
+                        <td class="{status_color}">{row["Status"]}</td>
+                        <td class="bloomberg-gray-text">{row["Timestamp"]}</td>
+                    </tr>
+                """
+            pairs_table_html += "</tbody></table>"
+            st.markdown(clean_html(pairs_table_html), unsafe_allow_html=True)
+            
     elif screen == "TICKER":
         ticker = st.session_state["bbg_ticker"]
         st.markdown(f"<h3 class='bloomberg-amber-text' style='margin-top: 0;'>📊 SECURITY PROFILE: {ticker} US EQUITY</h3>", unsafe_allow_html=True)
