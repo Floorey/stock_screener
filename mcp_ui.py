@@ -6,7 +6,14 @@ import json
 # Ensure parent directory is in path to import local modules
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-import mcp_server
+# Try importing mcp_server, handle missing dependencies (e.g. mcp package) gracefully
+mcp_available = True
+mcp_error_message = ""
+try:
+    import mcp_server
+except Exception as e:
+    mcp_available = False
+    mcp_error_message = str(e)
 
 def render_mcp_tab():
     st.markdown('<div class="wl-banner"><h2>🔌 Model Context Protocol (MCP) Server Hub</h2></div>', unsafe_allow_html=True)
@@ -15,6 +22,23 @@ def render_mcp_tab():
     ermöglicht, sicher auf Ihre lokalen Tools und Daten zuzugreifen. 
     Hier können Sie die Tools Ihres lokalen MCP-Servers testen und die Konfigurationsprofile für Ihre KI-Clients kopieren.
     """)
+
+    if not mcp_available:
+        st.error("⚠️ **MCP-Server Module konnten nicht geladen werden.**")
+        st.info(f"Details zum Ladefehler: `{mcp_error_message}`")
+        st.markdown("""
+        Dies passiert meist, wenn die erforderlichen Abhängigkeiten nicht in der aktuellen Python-Umgebung installiert sind (z. B. auf Streamlit Cloud).
+        
+        **Lokale Lösung:**
+        Installieren Sie das `mcp`-Paket in Ihrem Terminal:
+        ```bash
+        pip install mcp
+        ```
+        
+        **Für gehostete Umgebungen:**
+        Wir haben `mcp>=0.1.0` in die `requirements.txt` eingetragen. Sobald der Cloud-Server neu startet, sollte dieses Modul funktionieren.
+        """)
+        return
 
     # Main layout split into Instructions and Interactive Tool Tester
     col_left, col_right = st.columns([1, 1])
