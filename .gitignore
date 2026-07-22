@@ -11,6 +11,8 @@ __pycache__/
 # Local databases, data files and cache
 screener_cache.json
 watchlist.json
+execution_logs.json
+active_pairs.json
 *.csv
 *.xlsx
 
