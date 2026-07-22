@@ -16,11 +16,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from alpaca_trader import get_alpaca_credentials, get_positions, get_account_info, place_order, is_alpaca_configured
 
 # Initialize FastMCP Server v2.0.0
-mcp = FastMCP(
-    "falcone-capital-engine",
-    version="2.0.0",
-    description="Entkoppeltes Trading-System: Trennung von Markt-Scanning (60 Symbole) und reiner Signal-Execution."
-)
+mcp = FastMCP("falcone-capital-engine")
 
 # Define Ticker Universes
 NASDAQ_TICKERS = [
@@ -242,4 +238,32 @@ def execute_signal(ticker: str, category: str, signal_price: float, stop_loss: f
     return "\n".join(report)
 
 if __name__ == "__main__":
+    # Custom argument parsing to handle logging parameters before FastMCP/Click sees them
+    log_level = "INFO"
+    log_file = None
+    new_args = []
+    i = 1
+    while i < len(sys.argv):
+        arg = sys.argv[i]
+        if arg == "--log-level" and i + 1 < len(sys.argv):
+            log_level = sys.argv[i+1].upper()
+            i += 2
+        elif arg == "--log-file" and i + 1 < len(sys.argv):
+            log_file = sys.argv[i+1]
+            i += 2
+        else:
+            new_args.append(arg)
+            i += 1
+    sys.argv = [sys.argv[0]] + new_args
+
+    if log_file:
+        import logging
+        numeric_level = getattr(logging, log_level, logging.INFO)
+        log_dir = os.path.dirname(log_file)
+        if log_dir and not os.path.exists(log_dir):
+            os.makedirs(log_dir, exist_ok=True)
+        logging.basicConfig(filename=log_file, level=numeric_level,
+                            format='[%(asctime)s] [%(levelname)s] %(message)s')
+        logging.info(f"Falcone Capital Engine MCP Server started with log level {log_level}")
+
     mcp.run()
