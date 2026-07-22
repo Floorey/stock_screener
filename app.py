@@ -24,7 +24,6 @@ from cashflow_ui import render_cashflow_tab
 from performance_ui import render_performance_tab
 from algo_lab_ui import render_algo_lab_tab
 from bloomberg_ui import render_bloomberg_tab
-from mcp_ui import render_mcp_tab
 from risk_manager import (
     fetch_portfolio_positions,
     calculate_portfolio_var,
@@ -239,7 +238,7 @@ if "macro_futures_df" in st.session_state and not st.session_state["macro_future
     )
 
 # Initialize Tabs
-tab_bbg, tab1, tab_wl, tab_opt, tab_perf, tab2, tab_trade, tab_cash, tab_strat, tab_risk, tab_algo, tab3, tab_mcp = st.tabs([
+tab_bbg, tab1, tab_wl, tab_opt, tab_perf, tab2, tab_trade, tab_cash, tab_strat, tab_risk, tab_algo, tab3 = st.tabs([
     "📟 Bloomberg Terminal",
     "🎯 Screener Dashboard", 
     "⭐ Watchlist Manager", 
@@ -251,8 +250,7 @@ tab_bbg, tab1, tab_wl, tab_opt, tab_perf, tab2, tab_trade, tab_cash, tab_strat, 
     "⚡ Strategie-Desk (Option A & mehr)",
     "🛡️ Risk-Manager & Stress-Test",
     "🔬 Algo-Trading Testlab",
-    "📄 PDF Finanzbericht Analyzer",
-    "🔌 MCP Server Hub"
+    "📄 PDF Finanzbericht Analyzer"
 ])
 
 # ----------------------------------------------------
@@ -2637,11 +2635,5 @@ with tab3:
                         file_name=f"keyword_search_{st.session_state['loaded_report_name']}.csv",
                         mime="text/csv"
                     )
-
-# ----------------------------------------------------
-# TAB MCP: MCP SERVER HUB
-# ----------------------------------------------------
-with tab_mcp:
-    render_mcp_tab()
 
 
