@@ -174,8 +174,8 @@ def execute_signal(ticker: str, category: str, signal_price: float, stop_loss: f
     
     if alpaca_active:
         try:
-            status_code, res = place_order(ticker, final_qty, side, "market")
-            if status_code in [200, 201] or res.get("status") == "success":
+            res = place_order(ticker, final_qty, side, "market")
+            if res.get("status") == "success":
                 alpaca_success = True
                 order_id = res.get("order", {}).get("id", "N/A")
                 order_status = "placed/filled"
