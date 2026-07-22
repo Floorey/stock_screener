@@ -6,11 +6,12 @@ import json
 # Ensure parent directory is in path to import local modules
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-# Try importing mcp_server, handle missing dependencies (e.g. mcp package) gracefully
+# Try importing mcp_server and falcone_server, handle missing dependencies gracefully
 mcp_available = True
 mcp_error_message = ""
 try:
     import mcp_server
+    import falcone_server
 except Exception as e:
     mcp_available = False
     mcp_error_message = str(e)
@@ -20,7 +21,7 @@ def render_mcp_tab():
     st.markdown("""
     Das **Model Context Protocol (MCP)** ist ein offener Standard, der es KI-Assistenten (wie Claude Desktop, Cursor, Antigravity oder Windsurf) 
     ermöglicht, sicher auf Ihre lokalen Tools und Daten zuzugreifen. 
-    Hier können Sie die Tools Ihres lokalen MCP-Servers testen und die Konfigurationsprofile für Ihre KI-Clients kopieren.
+    Hier können Sie die Tools Ihrer lokalen MCP-Server testen und die Konfigurationsprofile für Ihre KI-Clients kopieren.
     """)
 
     if not mcp_available:
@@ -43,26 +44,28 @@ def render_mcp_tab():
     # Main layout split into Instructions and Interactive Tool Tester
     col_left, col_right = st.columns([1, 1])
 
+    python_path = os.path.join(os.path.dirname(__file__), ".venv", "Scripts", "python.exe")
+    python_path_json = python_path.replace("\\", "/")
+    
+    server_path_alpaca = os.path.join(os.path.dirname(__file__), "mcp_server.py").replace("\\", "/")
+    server_path_falcone = os.path.join(os.path.dirname(__file__), "falcone_server.py").replace("\\", "/")
+
     with col_left:
         st.subheader("⚙️ Integration & Konfiguration")
         
         # Expandable config instructions for Claude Desktop
         with st.expander("💬 Integration in Claude Desktop", expanded=True):
-            st.write("Fügen Sie diesen Block in Ihre Claude Desktop Konfigurationsdatei ein:")
-            
-            # Detect paths
-            python_path = os.path.join(os.path.dirname(__file__), ".venv", "Scripts", "python.exe")
-            server_path = os.path.join(os.path.dirname(__file__), "mcp_server.py")
-            
-            # Normalize to forward slashes for JSON config safety
-            python_path_json = python_path.replace("\\", "/")
-            server_path_json = server_path.replace("\\", "/")
+            st.write("Fügen Sie diesen Block in Ihre Claude Desktop Konfigurationsdatei ein, um beide Server zu laden:")
             
             config_json = {
                 "mcpServers": {
                     "alpaca-screener": {
                         "command": python_path_json,
-                        "args": [server_path_json]
+                        "args": [server_path_alpaca]
+                    },
+                    "falcone-capital-engine": {
+                        "command": python_path_json,
+                        "args": [server_path_falcone]
                     }
                 }
             }
@@ -74,30 +77,36 @@ def render_mcp_tab():
             claude_config_path = os.path.join(appdata, "Claude", "claude_desktop_config.json")
             st.markdown(f"**Konfigurationsdatei-Pfad:**")
             st.code(claude_config_path, language="text")
-            st.markdown("<small><i>Tipp: Falls die Datei oder der Ordner nicht existiert, erstellen Sie diese einfach. Starten Sie Claude Desktop nach dem Speichern neu.</i></small>", unsafe_allow_html=True)
+            st.markdown("<small><i>Tipp: Starten Sie Claude Desktop nach dem Speichern neu.</i></small>", unsafe_allow_html=True)
 
         # Expandable config instructions for Cursor / VS Code
         with st.expander("💻 Integration in Cursor IDE", expanded=False):
             st.markdown("""
-            Um diesen Server in **Cursor** zu nutzen:
+            Um diese Server in **Cursor** zu nutzen:
             1. Öffnen Sie die **Cursor-Einstellungen** (Zahnrad oben rechts oder `Ctrl + ,`).
             2. Gehen Sie zu **Features** -> **MCP**.
             3. Klicken Sie auf **+ Add New MCP Server**.
-            4. Tragen Sie folgende Details ein:
+            4. Tragen Sie für den **Alpaca Screener** ein:
                * **Name:** `Alpaca-Screener`
                * **Type:** `command`
                * **Command:**
             """)
-            st.code(f'"{python_path_json}" "{server_path_json}"', language="text")
+            st.code(f'"{python_path_json}" "{server_path_alpaca}"', language="text")
+            
             st.markdown("""
-            5. Klicken Sie auf **Save**. Der Status sollte auf `Connected` (grün) springen.
+            5. Klicken Sie auf **Save**.
+            6. Klicken Sie erneut auf **+ Add New MCP Server** für die **Volume Engine**:
+               * **Name:** `Falcone-Capital-Engine`
+               * **Type:** `command`
+               * **Command:**
             """)
+            st.code(f'"{python_path_json}" "{server_path_falcone}"', language="text")
+            st.markdown("7. Klicken Sie auf **Save**. Beide Server sollten nun grün leuchten.")
 
         # How to run standalone
         with st.expander("🏃 Standalone starten (Entwickler/Debugging)", expanded=False):
-            st.write("Sie können den MCP-Server manuell in der Konsole starten, um Fehlermeldungen (Logs) zu prüfen:")
-            st.code(f"cd {os.path.dirname(__file__)}\n.venv\\Scripts\\python mcp_server.py", language="powershell")
-            st.write("Der Server startet standardmäßig im **STDIO-Modus** und wartet auf Eingaben des Clients.")
+            st.write("Sie können den Falcone-MCP-Server manuell starten, um Logs zu prüfen:")
+            st.code(f"cd {os.path.dirname(__file__)}\n.venv\\Scripts\\python falcone_server.py", language="powershell")
 
     with col_right:
         st.subheader("🧪 Interaktiver Tool-Tester")
@@ -107,18 +116,38 @@ def render_mcp_tab():
         selected_tool = st.selectbox(
             "Wählen Sie ein MCP-Tool zum Testen:",
             [
-                "get_watchlist (Watchlist abrufen)",
-                "get_screener_scores (Aktuelle Screener-Scores abrufen)",
-                "get_alpaca_account_summary (Alpaca Kontozusammenfassung)",
-                "get_alpaca_portfolio_positions (Alpaca offene Positionen)",
-                "execute_alpaca_trade (Order auf Alpaca ausführen)"
+                "analyze_volume_spike (Falcone: Volumen-Spikes analysieren)",
+                "get_watchlist (Alpaca: Watchlist abrufen)",
+                "get_screener_scores (Alpaca: Screener-Scores abrufen)",
+                "get_alpaca_account_summary (Alpaca: Kontozusammenfassung)",
+                "get_alpaca_portfolio_positions (Alpaca: Offene Positionen)",
+                "execute_alpaca_trade (Alpaca: Order ausführen)"
             ]
         )
 
         st.markdown("---")
 
         # Form for running tools
-        if "get_watchlist" in selected_tool:
+        if "analyze_volume_spike" in selected_tool:
+            st.markdown("**Tool:** `analyze_volume_spike(ticker, multiplier)`")
+            st.markdown("*Beschreibung:* Analysiert den Kerzen-Stream auf institutionelle Volumen-Spikes und berechnet optimale Stop-Loss/Target-Zonen.")
+            
+            col_v1, col_v2 = st.columns(2)
+            with col_v1:
+                v_ticker = st.text_input("Ticker-Symbol (z.B. AAPL, TSLA)", value="AAPL").upper().strip()
+            with col_v2:
+                v_multiplier = st.number_input("Volumen-Multiplikator", min_value=1.0, value=3.0, step=0.5)
+                
+            if st.button("Tool ausführen", key="run_volume_spike", use_container_width=True):
+                with st.spinner("Analysiere Volumendaten über Alpaca API..."):
+                    try:
+                        res = falcone_server.analyze_volume_spike(ticker=v_ticker, multiplier=v_multiplier)
+                        st.success("Ergebnis erfolgreich empfangen:")
+                        st.text(res)
+                    except Exception as e:
+                        st.error(f"Fehler bei der Ausführung: {e}")
+
+        elif "get_watchlist" in selected_tool:
             st.markdown("**Tool:** `get_watchlist()`")
             st.markdown("*Beschreibung:* Gibt die Liste der Ticker-Symbole auf Ihrer Watchlist zurück.")
             
@@ -133,7 +162,7 @@ def render_mcp_tab():
 
         elif "get_screener_scores" in selected_tool:
             st.markdown("**Tool:** `get_screener_scores()`")
-            st.markdown("*Beschreibung:* Lädt die gecashten Screener-Daten und berechnet die aktuellen Long/Short-Scores. Hilft der KI, Trade-Kandidaten zu finden.")
+            st.markdown("*Beschreibung:* Lädt die gecashten Screener-Daten und berechnet die aktuellen Long/Short-Scores.")
             
             if st.button("Tool ausführen", key="run_screener_scores", use_container_width=True):
                 with st.spinner("Berechne Scores aus Cache..."):
@@ -187,7 +216,7 @@ def render_mcp_tab():
             if t_type == "limit":
                 t_limit_price = st.number_input("Limit-Preis ($)", min_value=0.01, value=150.0, step=0.5)
 
-            st.warning("⚠️ Achtung: Wenn Sie dieses Tool ausführen, wird eine reale Order (entsprechend Ihren Alpaca-Einstellungen, i.d.R. Paper Trading) platziert!")
+            st.warning("⚠️ Achtung: Wenn Sie dieses Tool ausführen, wird eine reale Order platziert!")
             
             if st.button("🔥 Order über Tool ausführen", key="run_execute_trade", use_container_width=True):
                 with st.spinner("Platziere Order über MCP..."):
