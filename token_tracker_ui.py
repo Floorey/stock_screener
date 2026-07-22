@@ -32,19 +32,16 @@ def get_token_tracker_data():
     # Function to extract model name from SQLite DB
     def extract_model_name(db_path):
         try:
-            # Open SQLite in read-only mode to prevent lock conflicts
             conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
             cur = conn.cursor()
             cur.execute("SELECT data FROM gen_metadata ORDER BY idx DESC LIMIT 10")
             rows = cur.fetchall()
             for (data,) in rows:
                 text = data.decode('utf-8', errors='ignore')
-                # Match common model name strings
                 match = re.search(r'(Gemini\s+3\.5\s+Flash\s+\(High\)|Gemini\s+3\.5\s+Flash\s+\(Medium\)|Gemini\s+3\.5\s+Pro|GPT-4o|Claude\s+3\.5\s+Sonnet|Claude\s+Opus\s+4\.6\s+\(Thinking\))', text)
                 if match:
                     return match.group(1)
                 
-                # Fallback: extract any ASCII string mentioning LLM brands
                 ascii_strings = re.findall(r'[a-zA-Z0-9\s\.\(\)\-\+]{4,}', text)
                 for s in reversed(ascii_strings):
                     if any(w in s for w in ["Gemini", "Flash", "Pro", "Claude", "Sonnet", "GPT", "Opus"]):
@@ -97,7 +94,6 @@ def get_token_tracker_data():
                         if source == "MODEL" and stype == "PLANNER_RESPONSE":
                             total_queries += 1
                             
-                            # Real-world token approximations (4 chars per token average)
                             input_tok = history_chars // 4
                             output_tok = step_chars // 4
                             total_tok = input_tok + output_tok
@@ -130,7 +126,6 @@ def get_token_tracker_data():
 
     df = pd.DataFrame(stats)
     
-    # If no real data can be retrieved, load high-fidelity default records
     if df.empty:
         df = pd.DataFrame([
             {
@@ -192,7 +187,6 @@ def get_antigravity_credits():
         if (pd.Timestamp.now() - cache_time).total_seconds() < 60:
             return cached_data
 
-    # Initial structure
     data = {
         "plan": "AI Premium Pro",
         "credits": "842 / 1000",
@@ -208,7 +202,6 @@ def get_antigravity_credits():
     }
 
     try:
-        # Run agy --print /credits
         startupinfo = subprocess.STARTUPINFO()
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         
@@ -232,7 +225,6 @@ def get_antigravity_credits():
             if q_m: data["quota"] = q_m.group(1).strip()
             if r_m: data["reset"] = r_m.group(1).strip()
 
-        # Run agy --print /quota
         res_q = subprocess.run(
             "agy --print /quota",
             capture_output=True,
@@ -250,97 +242,122 @@ def get_antigravity_credits():
             if parsed_quotas:
                 data["quotas"] = parsed_quotas
     except Exception:
-        # Graceful fallback to default values in case of timeouts
         pass
 
     st.session_state["credit_cache"] = (pd.Timestamp.now(), data)
     return data
 
-def optimize_prompt(raw_prompt, strategy):
+def optimize_prompt(raw_prompt, apply_fluff, apply_whitespace, apply_role, apply_xml):
     """
-    Applies heuristic optimization rules to compress prompt tokens.
+    Applies fine-grained heuristic optimization rules to compress prompt tokens.
+    Processes code blocks separately to ensure syntactical code is not broken.
     """
-    optimized = raw_prompt.strip()
+    if not raw_prompt.strip():
+        return "", 0, 0, 0, 0, []
+
+    # Helper: split prompt into text and code blocks
+    parts = []
+    pattern = r'(```[\s\S]*?```)'
+    raw_parts = re.split(pattern, raw_prompt)
     
-    # Common fluff/politeness elimination
-    fluff_patterns = [
-        r"(bitte\s+schreibe|bitte\s+erstelle|könntest\s+du\s+bitte|ich\s+würde\s+mich\s+freuen\s+wenn\s+du|kannst\s+du\s+mir\s+zeigen\s+wie|bitte\s+hilf\s+mir\s+dabei)",
-        r"(vielen\s+dank|danke\s+im\s+voraus|ich\s+wäre\s+dir\s+sehr\s+dankbar|vielen\s+dank\s+für\s+deine\s+hilfe)",
-        r"(hallo|guten\s+tag|hey|servus|moin|hallo\s+ai|hallo\s+antigravity)",
-        r"(bitte\s+stelle\s+sicher,\s+dass|achte\s+darauf,\s+dass|bitte\s+beachte\s+dass)"
-    ]
-    for pattern in fluff_patterns:
-        optimized = re.sub(pattern, "", optimized, flags=re.IGNORECASE)
-        
-    # Simplify verbosity
-    phrasings = {
-        "im folgenden Codeblock": "im Code",
-        "Schreibe eine Funktion, die": "Erstelle Funktion für:",
-        "Erkläre mir Schritt für Schritt, was": "Erkläre kurz:",
-        "Gehe detailliert darauf ein und erkläre": "Analysiere:",
-        "Gib mir den vollständigen Code für": "Code für:",
-        "Ich brauche Hilfe bei der Erstellung von": "Erstelle:"
-    }
-    for k, v in phrasings.items():
-        optimized = re.sub(re.escape(k), v, optimized, flags=re.IGNORECASE)
-        
     explanations = []
     
-    if strategy == "Kürzen & Komprimieren":
-        # Remove empty lines, collapse spaces
-        lines = [l.strip() for l in optimized.split('\n') if l.strip()]
-        optimized = "\n".join(lines)
-        optimized = re.sub(r' +', ' ', optimized)
-        explanations.append("• **Whitespace bereinigt:** Doppelte Leerzeichen und Leerzeilen entfernt.")
-        explanations.append("• **Fluff entfernt:** Höflichkeitsfloskeln gelöscht (LLMs benötigen kein 'Bitte' oder 'Danke').")
-        explanations.append("• **Prägnanz erhöht:** Weitschweifige Ausdrücke durch Imperative ersetzt.")
-        
-    elif strategy == "Strukturieren & XML-Tags":
-        lines = [l.strip() for l in optimized.split('\n') if l.strip()]
-        instructions = []
-        code_lines = []
-        in_code = False
-        
-        for line in lines:
-            if line.startswith("```"):
-                in_code = not in_code
-                code_lines.append(line)
-                continue
-            if in_code:
-                code_lines.append(line)
-            else:
-                instructions.append(line)
-                
-        opt_instr = "\n".join(instructions)
-        opt_code = "\n".join(code_lines)
-        
-        optimized = f"<instruction>\n{opt_instr}\n</instruction>"
-        if opt_code:
-            optimized += f"\n\n<context>\n{opt_code}\n</context>"
-            
-        explanations.append("• **XML-Strukturierung:** Anweisungen in `<instruction>` und Quelltext/Daten in `<context>` gekapselt.")
-        explanations.append("• **Aufmerksamkeits-Drift gesenkt:** Modell trennt Systemanweisungen sauber von verarbeiteten Daten.")
-        explanations.append("• **Strukturierte Argumentation:** Erleichtert Few-Shot Parsing.")
-        
-    elif strategy == "Rollen-Definition vereinfachen":
-        # Convert "Du bist ein erfahrener senior software engineer..." to "Rolle: Senior Dev"
-        role_match = re.search(r'(du\s+bist\s+ein\s+[\w\säöüß]+|agiere\s+als\s+[\w\säöüß]+)', optimized, re.IGNORECASE)
-        if role_match:
-            role = role_match.group(1).strip()
-            optimized = re.sub(re.escape(role), "", optimized, flags=re.IGNORECASE)
-            # Simplify role title
-            role_title = role.split(" ")[-1].capitalize()
-            optimized = f"Rolle: {role_title}\n" + optimized.strip()
+    # Process text parts only, leave code blocks untouched
+    for part in raw_parts:
+        if part.startswith("```") and part.endswith("```"):
+            # It's a code block, keep as is
+            parts.append(part)
         else:
-            optimized = "Rolle: Experte\n" + optimized
+            # It's natural language text, apply filters
+            text = part
             
-        explanations.append("• **Rollen-Kompression:** Komplexe Rollenbeschreibungen durch 'Rolle: [Titel]' abgekürzt.")
-        explanations.append("• **Präambel-Minderung:** Reduziert tokens im System-Prompt-Kontext um ca. 50-70%.")
+            # 1. Simplify verbose system role descriptions
+            if apply_role:
+                # English role patterns
+                role_match_en = re.search(r'(you\s+are\s+a\s+(?:senior\s+|expert\s+)?[\w\s\-]+|act\s+as\s+a\s+[\w\s\-]+)', text, re.IGNORECASE)
+                # German role patterns
+                role_match_de = re.search(r'(du\s+bist\s+ein\s+(?:erfahrener\s+|senior\s+|experte\s+für\s+)?[\w\s\-äöüß]+|agiere\s+als\s+[\w\s\-äöüß]+)', text, re.IGNORECASE)
+                
+                matched_role = None
+                if role_match_en:
+                    matched_role = role_match_en.group(1).strip()
+                elif role_match_de:
+                    matched_role = role_match_de.group(1).strip()
+                    
+                if matched_role:
+                    role_word = matched_role.split(" ")[-1].capitalize()
+                    text = re.sub(re.escape(matched_role), "", text, flags=re.IGNORECASE)
+                    text = f"Rolle: {role_word}\n" + text.strip()
+                    if "Rollen-Definition vereinfacht" not in explanations:
+                        explanations.append("• **Rollen-Definition vereinfacht:** Systemrolle komprimiert (z. B. 'Rolle: Dev').")
 
-    # Clean formatting
-    optimized = "\n".join([l.strip() for l in optimized.split('\n') if l.strip()])
+            # 2. Politeness / Fluff elimination
+            if apply_fluff:
+                fluff_patterns = [
+                    # German
+                    r"(bitte\s+schreibe|bitte\s+erstelle|könntest\s+du\s+bitte|ich\s+würde\s+mich\s+freuen\s+wenn\s+du|kannst\s+du\s+mir\s+zeigen\s+wie|bitte\s+hilf\s+mir\s+dabei)",
+                    r"(vielen\s+dank|danke\s+im\s+voraus|ich\s+wäre\s+dir\s+sehr\s+dankbar|vielen\s+dank\s+für\s+deine\s+hilfe)",
+                    r"(hallo|guten\s+tag|hey|servus|moin|hallo\s+ai|hallo\s+antigravity)",
+                    r"(bitte\s+stelle\s+sicher,\s+dass|achte\s+darauf,\s+dass|bitte\s+beachte\s+dass)",
+                    # English
+                    r"(could\s+you\s+please|would\s+you\s+mind|i\s+was\s+wondering\s+if\s+you\s+could|please\s+help\s+me\s+to|please\s+write|please\s+create)",
+                    r"(thank\s+you\s+very\s+much|thanks\s+in\s+advance|i\s+would\s+appreciate\s+it\s+if)",
+                    r"(hello|hi|hey\s+there|dear\s+assistant|hello\s+ai)",
+                    r"(please\s+make\s+sure\s+to|be\s+sure\s+to|please\s+note\s+that)"
+                ]
+                for p in fluff_patterns:
+                    text = re.sub(p, "", text, flags=re.IGNORECASE)
+                    
+                # Shorten phrasings
+                phrasings = {
+                    "im folgenden Codeblock": "im Code",
+                    "Schreibe eine Funktion, die": "Erstelle Funktion für:",
+                    "Erkläre mir Schritt für Schritt, was": "Erkläre kurz:",
+                    "Gehe detailliert darauf ein und erkläre": "Analysiere:",
+                    "Gib mir den vollständigen Code für": "Code für:",
+                    "Ich brauche Hilfe bei der Erstellung von": "Erstelle:",
+                    "write a function that": "create function for:",
+                    "explain step by step what": "explain briefly:",
+                    "give me the full code for": "code for:"
+                }
+                for k, v in phrasings.items():
+                    text = re.sub(re.escape(k), v, text, flags=re.IGNORECASE)
+                
+                if "Höflichkeitsfloskeln gelöscht" not in explanations:
+                    explanations.append("• **Höflichkeitsfloskeln gelöscht:** Füllwörter und KI-Anreden entfernt (LLMs benötigen kein 'Bitte' oder 'Danke').")
+
+            # 3. Collapse whitespace / double newlines
+            if apply_whitespace:
+                # Replace multiple spaces with single space
+                text = re.sub(r'[ \t]+', ' ', text)
+                # Split and clean empty lines
+                lines = [line.strip() for line in text.split('\n')]
+                text = "\n".join([line for line in lines if line])
+                if "Whitespace minimiert" not in explanations:
+                    explanations.append("• **Whitespace minimiert:** Überflüssige Leerzeichen und Leerzeilen entfernt.")
+                    
+            parts.append(text)
+            
+    # Combine back
+    optimized = "\n".join([p.strip() for p in parts if p.strip()])
     
-    # Calculate estimations
+    # 4. XML encapsulation
+    if apply_xml:
+        # Wrap instructions and context/code in clear tags
+        # If we have code block, separate it into context
+        code_blocks = re.findall(pattern, optimized)
+        clean_text = re.sub(pattern, "", optimized).strip()
+        
+        # Clean double newlines from text
+        clean_text = "\n".join([line.strip() for line in clean_text.split('\n') if line.strip()])
+        
+        xml_prompt = f"<instruction>\n{clean_text}\n</instruction>"
+        if code_blocks:
+            xml_prompt += "\n\n<context>\n" + "\n".join(code_blocks) + "\n</context>"
+        optimized = xml_prompt
+        explanations.append("• **XML-Kapselung:** Text in `<instruction>` und Code in `<context>` gekapselt zur besseren Trennung.")
+
+    # Calculations
     before_tokens = len(raw_prompt) // 4
     after_tokens = len(optimized) // 4
     savings_tokens = max(0, before_tokens - after_tokens)
@@ -369,7 +386,6 @@ def render_token_tracker_tab():
             font-size: 1rem;
             margin-bottom: 1.5rem;
         }
-        /* Dashboard metric card */
         .token-card {
             background-color: #1a1e29;
             border-radius: 12px;
@@ -405,7 +421,6 @@ def render_token_tracker_tab():
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
         }
-        /* Quota Box */
         .quota-container {
             background: #11141d;
             border: 1px solid #2d3748;
@@ -427,7 +442,6 @@ def render_token_tracker_tab():
             color: #e2e8f0;
             padding: 0.2rem 0;
         }
-        /* Prompt comparison box */
         .prompt-preview-box {
             background: #141722;
             border: 1px solid #2d3748;
@@ -447,26 +461,12 @@ def render_token_tracker_tab():
             border-radius: 4px;
             margin-top: 1rem;
         }
-        .saving-badge {
-            display: inline-block;
-            background-color: #2f855a;
-            color: #ffffff;
-            font-weight: bold;
-            padding: 0.3rem 0.8rem;
-            border-radius: 20px;
-            font-size: 0.9rem;
-            margin-bottom: 1rem;
-        }
     </style>
     """, unsafe_allow_html=True)
     
-    # Internal Tab structure
     sub_tab1, sub_tab2 = st.tabs(["📊 Token-Verbrauch & Quoten", "⚡ Prompt-Optimierer (Token sparen)"])
     
-    # Fetch log data
     serialization_format, df = get_token_tracker_data()
-    
-    # Fetch live credits/quotas from agy CLI
     credit_data = get_antigravity_credits()
     
     # ----------------------------------------------------
@@ -476,7 +476,6 @@ def render_token_tracker_tab():
         st.markdown('<h2 class="token-header">📊 Token-Verbrauch & Abo-Kennzahlen</h2>', unsafe_allow_html=True)
         st.markdown('<p class="token-sub">Übersicht über den kumulierten Datenverbrauch, das verbleibende Guthaben Ihrer Lizenz und API-Quoten.</p>', unsafe_allow_html=True)
         
-        # Live Subscription Metrics Row
         st.markdown("#### 💳 Aktive Abo-Stufe & Credits (Live-Abfrage)")
         col_sub = st.columns(4)
         
@@ -514,7 +513,6 @@ def render_token_tracker_tab():
             
         st.markdown("<br>", unsafe_allow_html=True)
         
-        # Cumulative Token consumption metrics
         st.markdown("#### 🪙 Kumulierter Entwicklungs-Verbrauch")
         col_tok = st.columns(5)
         
@@ -565,7 +563,6 @@ def render_token_tracker_tab():
             
         st.markdown("<br>", unsafe_allow_html=True)
         
-        # Model-specific quotas
         with st.expander("🔍 Modell-spezifische Kontingente & Limits (API-Quotas)", expanded=False):
             st.markdown('<div class="quota-container">', unsafe_allow_html=True)
             st.markdown('<div class="quota-title">Erlaubte Abfragen nach Modell</div>', unsafe_allow_html=True)
@@ -575,21 +572,19 @@ def render_token_tracker_tab():
             
         st.markdown("<br>", unsafe_allow_html=True)
         
-        # Separation by model filter
         st.markdown("### 🔍 Filterung nach Modell")
         available_models = sorted(list(df["Model"].unique()))
         selected_models = st.multiselect(
             "Filterbare Modelle auswählen",
             options=available_models,
             default=available_models,
-            help="Filtern Sie die Gesprächsstatistiken und Diagramme nach dem verarbeitenden Modell."
+            key="model_multiselect"
         )
         
         filtered_df = df[df["Model"].isin(selected_models)] if selected_models else df.copy()
         
         st.markdown("<br>", unsafe_allow_html=True)
         
-        # Charts and Data table
         chart_col, stat_col = st.columns([3, 2])
         with chart_col:
             st.markdown("#### 📊 Token-Verbrauch nach Modell")
@@ -624,8 +619,7 @@ def render_token_tracker_tab():
                 label="📥 CSV Report exportieren",
                 data=csv_data,
                 file_name="llm_token_usage_report.csv",
-                mime="text/csv",
-                help="Klicken Sie hier, um den vollständigen Bericht herunterzuladen."
+                mime="text/csv"
             )
         else:
             st.warning("Keine Tabellendaten vorhanden.")
@@ -635,7 +629,7 @@ def render_token_tracker_tab():
     # ----------------------------------------------------
     with sub_tab2:
         st.markdown('<h2 class="token-header">⚡ Prompt-Optimierungs-Workspace</h2>', unsafe_allow_html=True)
-        st.markdown('<p class="token-sub">Reduzieren Sie Ihren Token-Verbrauch drastisch durch gezieltes Komprimieren, Kapseln und Kürzen Ihrer Prompts vor dem Absenden.</p>', unsafe_allow_html=True)
+        st.markdown('<p class="token-sub">Wählen Sie feine Optimierungsschritte aus und vergleichen Sie den Tokenbedarf vor und nach der Bearbeitung.</p>', unsafe_allow_html=True)
         
         # Setup form
         col_inp, col_opts = st.columns([3, 1])
@@ -644,28 +638,35 @@ def render_token_tracker_tab():
             default_prompt = (
                 "Hallo lieber Assistent, könntest du mir bitte dabei helfen, eine Python-Funktion zu schreiben?\n"
                 "Ich brauche Hilfe bei der Erstellung von einer Funktion, die eine Zahl nimmt und prüft,\n"
-                "ob diese eine Primzahl ist. Bitte stelle sicher, dass du den Code gut kommentierst,\n"
+                "ob diese eine Primzahl ist. Hier ist mein bisheriger Code:\n"
+                "```python\n"
+                "def check(n):\n"
+                "    return True\n"
+                "```\n"
+                "Bitte stelle sicher, dass du den Code gut kommentierst,\n"
                 "und erkläre mir Schritt für Schritt, was die Zeilen bedeuten. Vielen Dank für deine Hilfe!"
             )
             raw_prompt_input = st.text_area(
                 "Entwurfs-Prompt eingeben:",
                 value=default_prompt,
-                height=160,
-                help="Geben Sie hier Ihren unstrukturierten oder langen Prompt ein."
+                height=220,
+                key="prompt_optimizer_textarea"
             )
             
         with col_opts:
-            optimization_strat = st.selectbox(
-                "Optimierungs-Strategie",
-                ["Kürzen & Komprimieren", "Strukturieren & XML-Tags", "Rollen-Definition vereinfachen"],
-                help="Auswahl des heuristischen Algorithmus zur Token-Minimierung."
-            )
+            st.markdown("**⚙️ Optimierungs-Schritte:**")
+            opt_fluff = st.checkbox("Füllwörter & Höflichkeit löschen", value=True, help="Entfernt 'Bitte', 'Danke', Begrüßungen und Floskeln.")
+            opt_space = st.checkbox("Leerzeichen & Zeilenumbrüche minimieren", value=True, help="Entfernt doppelte Zeilenenden und Leerzeichen.")
+            opt_role = st.checkbox("Systemrollen-Deklarationen vereinfachen", value=True, help="Komprimiert Rollenbeschreibungen zu prägnanten Tags.")
+            opt_xml = st.checkbox("XML-Kapselung anwenden", value=False, help="Kapselt Text in <instruction> und Code in <context>.")
             
             trigger_optimize = st.button("🪄 Prompt optimieren", use_container_width=True)
             
         # Display optimization result
         if trigger_optimize and raw_prompt_input:
-            opt_text, before_tok, after_tok, saved_tok, saved_pct, steps = optimize_prompt(raw_prompt_input, optimization_strat)
+            opt_text, before_tok, after_tok, saved_tok, saved_pct, steps = optimize_prompt(
+                raw_prompt_input, opt_fluff, opt_space, opt_role, opt_xml
+            )
             
             st.markdown("---")
             st.markdown("### 🎉 Optimierungsergebnis")
@@ -708,8 +709,11 @@ def render_token_tracker_tab():
             # Optimizations performed explanation card
             st.markdown('<div class="explanation-card">', unsafe_allow_html=True)
             st.markdown("**🛠️ Vorgenommene Optimierungen:**")
-            for step_desc in steps:
-                st.markdown(step_desc)
+            if steps:
+                for step_desc in steps:
+                    st.markdown(step_desc)
+            else:
+                st.markdown("• Keine Änderungen vorgenommen (keine Optionen ausgewählt).")
             st.markdown('</div>', unsafe_allow_html=True)
             
         st.markdown("<br><br>", unsafe_allow_html=True)
