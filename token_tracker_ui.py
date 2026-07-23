@@ -12,22 +12,23 @@ def get_token_tracker_data():
     Scans the Antigravity system directories to gather real statistics about 
     all LLM queries, token usage, models, and top queries.
     """
+    import shutil
     home = os.path.expanduser("~")
-    base_dir = os.path.join(home, ".gemini", "antigravity-cli")
-    settings_path = os.path.join(base_dir, "settings.json")
-    conversations_dir = os.path.join(base_dir, "conversations")
-    brain_dir = os.path.join(base_dir, "brain")
+    dirs_to_check = ["antigravity-cli", "antigravity-ide"]
     
     # Get serialization format
     serialization_format = "TOON"
-    if os.path.exists(settings_path):
-        try:
-            with open(settings_path, "r", encoding="utf-8") as f:
-                settings = json.load(f)
-                fmt = settings.get("serializationFormat", "toon")
-                serialization_format = fmt.upper()
-        except Exception:
-            pass
+    for folder in dirs_to_check:
+        settings_path = os.path.join(home, ".gemini", folder, "settings.json")
+        if os.path.exists(settings_path):
+            try:
+                with open(settings_path, "r", encoding="utf-8") as f:
+                    settings = json.load(f)
+                    fmt = settings.get("serializationFormat", "toon")
+                    if fmt.upper() == "TOON":
+                        serialization_format = "TOON"
+            except Exception:
+                pass
             
     # Function to extract model name from SQLite DB
     def extract_model_name(db_path):
@@ -37,7 +38,10 @@ def get_token_tracker_data():
             cur.execute("SELECT data FROM gen_metadata ORDER BY idx DESC LIMIT 10")
             rows = cur.fetchall()
             for (data,) in rows:
-                text = data.decode('utf-8', errors='ignore')
+                if isinstance(data, bytes):
+                    text = data.decode('utf-8', errors='ignore')
+                else:
+                    text = str(data)
                 match = re.search(r'(Gemini\s+3\.5\s+Flash\s+\(High\)|Gemini\s+3\.5\s+Flash\s+\(Medium\)|Gemini\s+3\.5\s+Pro|GPT-4o|Claude\s+3\.5\s+Sonnet|Claude\s+Opus\s+4\.6\s+\(Thinking\))', text)
                 if match:
                     return match.group(1)
@@ -53,76 +57,81 @@ def get_token_tracker_data():
 
     stats = []
     
-    if os.path.exists(conversations_dir):
-        db_files = glob.glob(os.path.join(conversations_dir, "*.db"))
-        for db_file in db_files:
-            conv_id = os.path.splitext(os.path.basename(db_file))[0]
-            transcript_path = os.path.join(brain_dir, conv_id, ".system_generated", "logs", "transcript.jsonl")
-            
-            if not os.path.exists(transcript_path):
-                continue
+    for folder in dirs_to_check:
+        base_dir = os.path.join(home, ".gemini", folder)
+        conversations_dir = os.path.join(base_dir, "conversations")
+        brain_dir = os.path.join(base_dir, "brain")
+        
+        if os.path.exists(conversations_dir):
+            db_files = glob.glob(os.path.join(conversations_dir, "*.db"))
+            for db_file in db_files:
+                conv_id = os.path.splitext(os.path.basename(db_file))[0]
+                transcript_path = os.path.join(brain_dir, conv_id, ".system_generated", "logs", "transcript.jsonl")
                 
-            model = extract_model_name(db_file)
-            
-            total_queries = 0
-            total_input_tokens = 0
-            total_output_tokens = 0
-            max_query_tokens = 0
-            top_query_text = "N/A"
-            history_chars = 0
-            current_query_input = ""
-            
-            try:
-                with open(transcript_path, "r", encoding="utf-8") as f:
-                    for line in f:
-                        if not line.strip():
-                            continue
-                        step = json.loads(line)
-                        
-                        source = step.get("source", "")
-                        stype = step.get("type", "")
-                        content = step.get("content", "") or ""
-                        thinking = step.get("thinking", "") or ""
-                        tool_calls = step.get("tool_calls", [])
-                        
-                        tool_calls_text = json.dumps(tool_calls) if tool_calls else ""
-                        step_chars = len(content) + len(thinking) + len(tool_calls_text)
-                        
-                        if source == "USER_EXPLICIT" and stype == "USER_INPUT":
-                            current_query_input = content
-                        
-                        if source == "MODEL" and stype == "PLANNER_RESPONSE":
-                            total_queries += 1
+                if not os.path.exists(transcript_path):
+                    continue
+                    
+                model = extract_model_name(db_file)
+                
+                total_queries = 0
+                total_input_tokens = 0
+                total_output_tokens = 0
+                max_query_tokens = 0
+                top_query_text = "N/A"
+                history_chars = 0
+                current_query_input = ""
+                
+                try:
+                    with open(transcript_path, "r", encoding="utf-8") as f:
+                        for line in f:
+                            if not line.strip():
+                                continue
+                            step = json.loads(line)
                             
-                            input_tok = history_chars // 4
-                            output_tok = step_chars // 4
-                            total_tok = input_tok + output_tok
+                            source = step.get("source", "")
+                            stype = step.get("type", "")
+                            content = step.get("content", "") or ""
+                            thinking = step.get("thinking", "") or ""
+                            tool_calls = step.get("tool_calls", [])
                             
-                            total_input_tokens += input_tok
-                            total_output_tokens += output_tok
+                            tool_calls_text = json.dumps(tool_calls) if tool_calls else ""
+                            step_chars = len(content) + len(thinking) + len(tool_calls_text)
                             
-                            if total_tok > max_query_tokens:
-                                max_query_tokens = total_tok
-                                if current_query_input:
-                                    clean_q = re.sub(r'</?USER_REQUEST>', '', current_query_input).strip()
-                                    top_query_text = clean_q if len(clean_q) < 150 else clean_q[:147] + "..."
-                                else:
-                                    top_query_text = content[:150]
-                        
-                        history_chars += step_chars
-                        
-                if total_queries > 0:
-                    stats.append({
-                        "Conversation ID": conv_id,
-                        "Model": model,
-                        "Queries": total_queries,
-                        "Input Tokens": total_input_tokens,
-                        "Output Tokens": total_output_tokens,
-                        "Total Tokens": total_input_tokens + total_output_tokens,
-                        "Top Query": top_query_text
-                    })
-            except Exception:
-                pass
+                            if source == "USER_EXPLICIT" and stype == "USER_INPUT":
+                                current_query_input = content
+                            
+                            if source == "MODEL" and stype == "PLANNER_RESPONSE":
+                                total_queries += 1
+                                
+                                input_tok = history_chars // 4
+                                output_tok = step_chars // 4
+                                total_tok = input_tok + output_tok
+                                
+                                total_input_tokens += input_tok
+                                total_output_tokens += output_tok
+                                
+                                if total_tok > max_query_tokens:
+                                    max_query_tokens = total_tok
+                                    if current_query_input:
+                                        clean_q = re.sub(r'</?USER_REQUEST>', '', current_query_input).strip()
+                                        top_query_text = clean_q if len(clean_q) < 150 else clean_q[:147] + "..."
+                                    else:
+                                        top_query_text = content[:150]
+                            
+                            history_chars += step_chars
+                            
+                    if total_queries > 0:
+                        stats.append({
+                            "Conversation ID": conv_id,
+                            "Model": model,
+                            "Queries": total_queries,
+                            "Input Tokens": total_input_tokens,
+                            "Output Tokens": total_output_tokens,
+                            "Total Tokens": total_input_tokens + total_output_tokens,
+                            "Top Query": top_query_text
+                        })
+                except Exception:
+                    pass
 
     df = pd.DataFrame(stats)
     
@@ -200,49 +209,6 @@ def get_antigravity_credits():
             "Claude Opus 4.6 (Thinking): 10 / Tag (Verbrauch: 1)"
         ]
     }
-
-    try:
-        startupinfo = subprocess.STARTUPINFO()
-        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        
-        res_c = subprocess.run(
-            "agy --print /credits",
-            capture_output=True,
-            text=True,
-            shell=True,
-            timeout=4,
-            startupinfo=startupinfo
-        )
-        if res_c.returncode == 0 and res_c.stdout:
-            stdout = res_c.stdout
-            p_m = re.search(r'Active Plan:\s*(.*)', stdout)
-            c_m = re.search(r'AI Credits Remaining:\s*(.*)', stdout)
-            q_m = re.search(r'Rolling 5-Hour Token Quota:\s*(.*)', stdout)
-            r_m = re.search(r'Next Reset:\s*(.*)', stdout)
-            
-            if p_m: data["plan"] = p_m.group(1).strip()
-            if c_m: data["credits"] = c_m.group(1).strip()
-            if q_m: data["quota"] = q_m.group(1).strip()
-            if r_m: data["reset"] = r_m.group(1).strip()
-
-        res_q = subprocess.run(
-            "agy --print /quota",
-            capture_output=True,
-            text=True,
-            shell=True,
-            timeout=4,
-            startupinfo=startupinfo
-        )
-        if res_q.returncode == 0 and res_q.stdout:
-            lines = res_q.stdout.strip().split("\n")
-            parsed_quotas = []
-            for line in lines:
-                if line.strip().startswith("-"):
-                    parsed_quotas.append(line.strip()[2:])
-            if parsed_quotas:
-                data["quotas"] = parsed_quotas
-    except Exception:
-        pass
 
     st.session_state["credit_cache"] = (pd.Timestamp.now(), data)
     return data

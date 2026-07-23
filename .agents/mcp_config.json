@@ -4,8 +4,8 @@
       "command": "uvx",
       "args": ["alpaca-mcp-server"],
       "env": {
-        "ALPACA_API_KEY": "YOUR_ALPACA_API_KEY_HERE",
-        "ALPACA_SECRET_KEY": "YOUR_ALPACA_SECRET_KEY_HERE",
+        "ALPACA_API_KEY": "PKHJGBKKLN2RBPNEW6CAMKIIKCJ",
+        "ALPACA_SECRET_KEY": "BhfYcVWsupiZq6Z8WUFD716m9CHYUf2UeoLKkmS1pphv",
         "ALPACA_BASE_URL": "https://paper-api.alpaca.markets",
         "ALPACA_PAPER_TRADE": "true"
       }

@@ -1,10 +1,17 @@
 import os
+import sys
 import requests
 from typing import Dict, Any, List, Optional
 from dotenv import load_dotenv
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 # Ensure env vars are loaded and override any stale cache
 load_dotenv(override=True)
+
 
 def get_alpaca_credentials() -> tuple[Optional[str], Optional[str], str]:
     """Retrieves Alpaca API credentials from environment variables or active session."""
@@ -59,9 +66,9 @@ def get_account_info() -> Dict[str, Any]:
         if response.status_code == 200:
             return response.json()
         else:
-            print(f"[Alpaca Trader] Account fetch failed: Status {response.status_code}")
+            print(f"[Alpaca Trader] Account fetch failed: Status {response.status_code}", file=sys.stderr)
     except Exception as e:
-        print(f"[Alpaca Trader] Connection error during account fetch: {e}")
+        print(f"[Alpaca Trader] Connection error during account fetch: {e}", file=sys.stderr)
     return {}
 
 def verify_alpaca_connection() -> tuple[bool, str]:
@@ -112,7 +119,7 @@ def get_positions() -> List[Dict[str, Any]]:
         if response.status_code == 200:
             return response.json()
     except Exception as e:
-        print(f"[Alpaca Trader] Connection error during positions fetch: {e}")
+        print(f"[Alpaca Trader] Connection error during positions fetch: {e}", file=sys.stderr)
     return []
 
 def get_open_orders() -> List[Dict[str, Any]]:
@@ -131,7 +138,7 @@ def get_open_orders() -> List[Dict[str, Any]]:
         if response.status_code == 200:
             return response.json()
     except Exception as e:
-        print(f"[Alpaca Trader] Connection error during orders fetch: {e}")
+        print(f"[Alpaca Trader] Connection error during orders fetch: {e}", file=sys.stderr)
     return []
 
 def place_order(
@@ -196,7 +203,7 @@ def cancel_order(order_id: str) -> bool:
         response = requests.delete(url, headers=get_alpaca_headers(), timeout=10)
         return response.status_code == 204
     except Exception as e:
-        print(f"[Alpaca Trader] Connection error during order cancellation: {e}")
+        print(f"[Alpaca Trader] Connection error during order cancellation: {e}", file=sys.stderr)
     return False
 
 def cancel_all_orders() -> bool:
@@ -210,7 +217,7 @@ def cancel_all_orders() -> bool:
         response = requests.delete(url, headers=get_alpaca_headers(), timeout=10)
         return response.status_code == 207  # Multi-status response for batch delete
     except Exception as e:
-        print(f"[Alpaca Trader] Connection error during batch cancellation: {e}")
+        print(f"[Alpaca Trader] Connection error during batch cancellation: {e}", file=sys.stderr)
     return False
 
 def wait_for_order_fill(order_id: str, timeout: int = 15) -> bool:
@@ -232,14 +239,14 @@ def wait_for_order_fill(order_id: str, timeout: int = 15) -> bool:
                 if status == "filled":
                     return True
                 elif status in ["canceled", "rejected", "expired"]:
-                    print(f"[Alpaca] Order {order_id} ended with status: {status}")
+                    print(f"[Alpaca] Order {order_id} ended with status: {status}", file=sys.stderr)
                     return False
             time.sleep(0.5)
         except Exception as e:
-            print(f"[Alpaca] Error checking order fill status: {e}")
+            print(f"[Alpaca] Error checking order fill status: {e}", file=sys.stderr)
             time.sleep(0.5)
             
-    print(f"[Alpaca] Order {order_id} did not fill within {timeout} seconds.")
+    print(f"[Alpaca] Order {order_id} did not fill within {timeout} seconds.", file=sys.stderr)
     return False
 
 def close_position(symbol: str) -> bool:
@@ -253,7 +260,7 @@ def close_position(symbol: str) -> bool:
         response = requests.delete(url, headers=get_alpaca_headers(), timeout=10)
         return response.status_code in [200, 201, 204]
     except Exception as e:
-        print(f"[Alpaca Trader] Connection error during position liquidation: {e}")
+        print(f"[Alpaca Trader] Connection error during position liquidation: {e}", file=sys.stderr)
     return False
 
 def close_position_partial(symbol: str, qty: float) -> Dict[str, Any]:
@@ -307,7 +314,7 @@ def get_position_for_symbol(symbol: str) -> Optional[Dict[str, Any]]:
         if response.status_code == 200:
             return response.json()
     except Exception as e:
-        print(f"[Alpaca Trader] Connection error fetching position for {symbol}: {e}")
+        print(f"[Alpaca Trader] Connection error fetching position for {symbol}: {e}", file=sys.stderr)
     return None
 
 def get_position_qty(symbol: str) -> float:
@@ -341,8 +348,9 @@ def get_account_activities(activity_types: Optional[List[str]] = None) -> List[D
         if response.status_code == 200:
             return response.json()
         else:
-            print(f"[Alpaca Trader] Activities fetch failed: Status {response.status_code} - {response.text}")
+            print(f"[Alpaca Trader] Activities fetch failed: Status {response.status_code} - {response.text}", file=sys.stderr)
     except Exception as e:
-        print(f"[Alpaca Trader] Connection error during activities fetch: {e}")
+        print(f"[Alpaca Trader] Connection error during activities fetch: {e}", file=sys.stderr)
     return []
+
 

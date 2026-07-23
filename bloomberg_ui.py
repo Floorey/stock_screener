@@ -710,10 +710,11 @@ def render_bloomberg_tab():
             if st.button("❓ HELP", key="bbg_btn_help", use_container_width=True):
                 st.session_state["bbg_screen"] = "HELP"
                 
-    # Refresh Checkbox
+    # Refresh Button
     col_ref, col_spacer = st.columns([5, 7])
     with col_ref:
-        auto_refresh = st.checkbox("Auto-Refresh Terminal Display (15s)", value=False, key="bbg_auto_refresh")
+        if st.button("🔄 Terminal aktualisieren", key="bbg_manual_refresh", use_container_width=True):
+            st.rerun()
         
     st.markdown("<hr style='border: 1px solid #222; margin: 10px 0;'>", unsafe_allow_html=True)
     
@@ -1135,6 +1136,42 @@ def render_bloomberg_tab():
             pairs_table_html += "</tbody></table>"
             st.markdown(clean_html(pairs_table_html), unsafe_allow_html=True)
             
+        # Section 3: Falcone Capital Engine Live Log Stream
+        st.markdown("<br><div style='background-color: #0c0c0c; border: 1px solid #333; padding: 10px; border-radius: 4px; font-family: \"Courier New\", Courier, monospace; margin-bottom: 15px;'>"
+                    "<span style='color: #00ffff; font-weight: bold;'>[3] FALCONE ENGINE BACKGROUND SCANNER LOGS</span>"
+                    "</div>", unsafe_allow_html=True)
+        
+        log_file_path = os.path.join(os.path.dirname(__file__), "falcone_engine.log")
+        if not os.path.exists(log_file_path):
+            st.markdown("<div style='color: #ff3333; font-family: \"Courier New\", Courier, monospace;'>NO ACTIVE FALCONE ENGINE LOG FILE FOUND.</div>", unsafe_allow_html=True)
+        else:
+            try:
+                # Read the last 20 lines of the log file
+                with open(log_file_path, "r", encoding="utf-8") as lf:
+                    log_lines = lf.readlines()
+                last_lines = [l.strip() for l in log_lines[-20:] if l.strip()]
+                
+                if not last_lines:
+                    st.markdown("<div style='color: #ff3333; font-family: \"Courier New\", Courier, monospace;'>FALCONE LOG FILE IS EMPTY.</div>", unsafe_allow_html=True)
+                else:
+                    # Construct a beautiful Terminal-like display box
+                    log_box_html = "<div style='background-color: #050505; border: 1px solid #222; padding: 10px; border-radius: 4px; font-family: \"Courier New\", Courier, monospace; font-size: 12px; line-height: 1.4; max-height: 300px; overflow-y: auto;'>"
+                    for line in last_lines:
+                        # Highlight keywords for authentic Bloomberg styling
+                        if "[ERROR]" in line or "failed" in line.lower() or "Failed" in line:
+                            line_colored = f"<span style='color: #ff3333;'>{line}</span>"
+                        elif "[INFO] execute_signal" in line or "placed/filled" in line.lower() or "BUY" in line or "SELL" in line:
+                            line_colored = f"<span style='color: #00ff00;'>{line}</span>"
+                        elif "scan_markets" in line.lower():
+                            line_colored = f"<span style='color: #ffff00;'>{line}</span>"
+                        else:
+                            line_colored = f"<span style='color: #00ffcc;'>{line}</span>"
+                        log_box_html += f"<div>{line_colored}</div>"
+                    log_box_html += "</div>"
+                    st.markdown(log_box_html, unsafe_allow_html=True)
+            except Exception as e:
+                st.error(f"Error loading Falcone Engine logs: {e}")
+            
     elif screen == "TICKER":
         ticker = st.session_state["bbg_ticker"]
         st.markdown(f"<h3 class='bloomberg-amber-text' style='margin-top: 0;'>📊 SECURITY PROFILE: {ticker} US EQUITY</h3>", unsafe_allow_html=True)
@@ -1297,7 +1334,4 @@ def render_bloomberg_tab():
             ticker_news = fetch_company_news(ticker)
             st.markdown(make_bloomberg_news_html(ticker_news), unsafe_allow_html=True)
             
-    # Sleep & rerun for auto-refresh
-    if auto_refresh:
-        time.sleep(15)
-        st.rerun()
+

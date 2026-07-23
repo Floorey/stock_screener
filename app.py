@@ -2642,6 +2642,7 @@ with tab3:
 # TAB TOK: LLM TOKEN TRACKER
 # ----------------------------------------------------
 with tab_tok:
+    # Render the token tracker and prompt optimizer UI
     render_token_tracker_tab()
 
 
