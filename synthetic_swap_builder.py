@@ -6,6 +6,16 @@ import pandas as pd
 from datetime import datetime
 from dotenv import load_dotenv
 
+import sys
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+def _log(msg: str = ""):
+    print(msg, file=sys.stderr)
+
 # Load Alpaca configuration and override any stale environment variables
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=True)
 
@@ -82,7 +92,7 @@ def get_alpaca_option_quote(symbol: str) -> dict:
                 mid = (bid + ask) / 2.0 if (bid > 0 and ask > 0) else (bid or ask or 0.0)
                 return {"bid": bid, "ask": ask, "mid": mid}
     except Exception as e:
-        print(f"Error fetching Alpaca option quote for {symbol}: {e}")
+        _log(f"Error fetching Alpaca option quote for {symbol}: {e}")
     return {}
 
 def get_alpaca_option_contracts(underlying: str) -> list[dict]:
@@ -105,7 +115,7 @@ def get_alpaca_option_contracts(underlying: str) -> list[dict]:
         if res.status_code == 200:
             return res.json().get("option_contracts", [])
     except Exception as e:
-        print(f"Error fetching Alpaca options contracts: {e}")
+        _log(f"Error fetching Alpaca options contracts: {e}")
     return []
 
 def execute_synthetic_swap(ticker: str, direction: str, qty: int, strike: float = None, expiry: str = None) -> bool:
@@ -123,12 +133,12 @@ def execute_synthetic_swap(ticker: str, direction: str, qty: int, strike: float 
     ticker = ticker.upper().strip()
     direction = direction.lower().strip()
     
-    print(f"\n==================================================")
-    print(f"⚡ BUILDING SYNTHETIC {direction.upper()} SWAP ON {ticker}")
-    print(f"==================================================")
+    _log(f"\n==================================================")
+    _log(f"[BUILDING] SYNTHETIC {direction.upper()} SWAP ON {ticker}")
+    _log(f"==================================================")
     
     if not API_KEY or not SECRET_KEY:
-        print("Error: Alpaca API Keys not configured in .env!")
+        _log("Error: Alpaca API Keys not configured in .env!")
         return False
         
     # Get available buying power
@@ -139,7 +149,7 @@ def execute_synthetic_swap(ticker: str, direction: str, qty: int, strike: float 
         if acc_res.status_code == 200:
             acc_data = acc_res.json()
             opt_bp = float(acc_data.get("options_buying_power") or acc_data.get("buying_power") or acc_data.get("cash", 0.0))
-            print(f"Available Options Buying Power: ${opt_bp:,.2f}")
+            _log(f"Available Options Buying Power: ${opt_bp:,.2f}")
     except Exception as e:
         pass
         
@@ -152,7 +162,7 @@ def execute_synthetic_swap(ticker: str, direction: str, qty: int, strike: float 
         if not hist.empty:
             current_price = float(hist["Close"].iloc[-1])
     except Exception as e:
-        print(f"yfinance price fetch failed: {e}. Trying Alpaca Data API...")
+        _log(f"yfinance price fetch failed: {e}. Trying Alpaca Data API...")
         
     if current_price is None:
         # Fallback to Alpaca Data API
@@ -164,15 +174,15 @@ def execute_synthetic_swap(ticker: str, direction: str, qty: int, strike: float 
                     trade_data = res.json()
                     current_price = trade_data.get("trade", {}).get("p")
                     if current_price:
-                        print(f"Loaded price from Alpaca Data API: ${current_price:.2f}")
+                        _log(f"Loaded price from Alpaca Data API: ${current_price:.2f}")
             except Exception as e:
-                print(f"Alpaca Data API price fetch failed: {e}")
+                _log(f"Alpaca Data API price fetch failed: {e}")
                 
     if current_price is None:
-        print(f"Error: Could not resolve current price for {ticker} (Yahoo rate limited & Alpaca failed).")
+        _log(f"Error: Could not resolve current price for {ticker} (Yahoo rate limited & Alpaca failed).")
         return False
         
-    print(f"Current Stock Price: ${current_price:.2f}")
+    _log(f"Current Stock Price: ${current_price:.2f}")
     
     # 2. Resolve ATM strike if not provided
     if not strike:
@@ -183,11 +193,11 @@ def execute_synthetic_swap(ticker: str, direction: str, qty: int, strike: float 
     try:
         options = list(tk.options)
     except Exception as e:
-        print(f"yfinance options list fetch failed: {e}. Trying Alpaca...")
+        _log(f"yfinance options list fetch failed: {e}. Trying Alpaca...")
         
     if not options:
         # Fallback to Alpaca
-        print("Fetching option expirations from Alpaca...")
+        _log("Fetching option expirations from Alpaca...")
         contracts = get_alpaca_option_contracts(ticker)
         if contracts:
             # Extract unique expiration dates
@@ -195,7 +205,7 @@ def execute_synthetic_swap(ticker: str, direction: str, qty: int, strike: float 
             options = expiries
             
     if not options:
-        print(f"Error: No option chains available for {ticker}!")
+        _log(f"Error: No option chains available for {ticker}!")
         return False
         
     if not expiry:
@@ -208,8 +218,8 @@ def execute_synthetic_swap(ticker: str, direction: str, qty: int, strike: float 
                 expiry = d
                 break
                 
-    print(f"Target Strike: ${strike:.2f}")
-    print(f"Expiration Date: {expiry}")
+    _log(f"Target Strike: ${strike:.2f}")
+    _log(f"Expiration Date: {expiry}")
     
     # Pre-check buying power requirement for Short Put in Synthetic Long
     required_bp = 0.0
@@ -218,10 +228,10 @@ def execute_synthetic_swap(ticker: str, direction: str, qty: int, strike: float 
         required_bp = strike * 100.0 * qty
         
     if required_bp > opt_bp:
-        print(f"\n❌ ERROR: Insufficient options buying power!")
-        print(f"  -> Required Collateral (Short Put): ${required_bp:,.2f}")
-        print(f"  -> Available Buying Power (Alpaca):  ${opt_bp:,.2f}")
-        print(f"Aborting execution to prevent incomplete leg execution (e.g. buying the Call but failing to sell the Put).")
+        _log(f"\n[ERROR] Insufficient options buying power!")
+        _log(f"  -> Required Collateral (Short Put): ${required_bp:,.2f}")
+        _log(f"  -> Available Buying Power (Alpaca):  ${opt_bp:,.2f}")
+        _log(f"Aborting execution to prevent incomplete leg execution (e.g. buying the Call but failing to sell the Put).")
         return False
     
     # 4. Fetch option chain details
@@ -238,7 +248,7 @@ def execute_synthetic_swap(ticker: str, direction: str, qty: int, strike: float 
         call_con = calls_df.iloc[(calls_df['strike'] - strike).abs().argsort()[:1]].iloc[0].to_dict()
         put_con = puts_df.iloc[(puts_df['strike'] - strike).abs().argsort()[:1]].iloc[0].to_dict()
     except Exception as e:
-        print(f"yfinance option chain fetch failed: {e}. Falling back to Alpaca...")
+        _log(f"yfinance option chain fetch failed: {e}. Falling back to Alpaca...")
         use_yfinance_chain = False
         
     if not use_yfinance_chain or not call_con or not put_con:
@@ -246,12 +256,12 @@ def execute_synthetic_swap(ticker: str, direction: str, qty: int, strike: float 
         c_symbol = format_osi_symbol(ticker, expiry, "call", strike)
         p_symbol = format_osi_symbol(ticker, expiry, "put", strike)
         
-        print(f"Fetching quotes from Alpaca for:\n  Call: {c_symbol}\n  Put:  {p_symbol}")
+        _log(f"Fetching quotes from Alpaca for:\n  Call: {c_symbol}\n  Put:  {p_symbol}")
         c_quote = get_alpaca_option_quote(c_symbol)
         p_quote = get_alpaca_option_quote(p_symbol)
         
         if not c_quote or not p_quote:
-            print("Error: Could not retrieve option quotes from Alpaca. Please verify your Alpaca API Keys.")
+            _log("Error: Could not retrieve option quotes from Alpaca. Please verify your Alpaca API Keys.")
             return False
             
         c_mid = c_quote["mid"]
@@ -318,27 +328,28 @@ def execute_synthetic_swap(ticker: str, direction: str, qty: int, strike: float 
             ]
         
     # Show structure
-    print("\nPositions to be executed:")
+    _log("\nPositions to be executed:")
     for leg in legs:
-        print(f"  * {leg['name']} -> Symbol: {leg['symbol']} | Action: {leg['side'].upper()} | Limit: ${leg['limit_price']:.2f}")
+        _log(f"  * {leg['name']} -> Symbol: {leg['symbol']} | Action: {leg['side'].upper()} | Limit: ${leg['limit_price']:.2f}")
         
-    print("\nSending orders to Alpaca...")
+    _log("\nSending orders to Alpaca...")
     success_count = 0
     for leg in legs:
-        print(f"Submitting {leg['side'].upper()} order for {qty} contract(s) of {leg['symbol']}...")
+        _log(f"Submitting {leg['side'].upper()} order for {qty} contract(s) of {leg['symbol']}...")
         status, res = place_alpaca_order(leg["symbol"], qty, leg["side"], "limit", leg["limit_price"])
         if status in [200, 201]:
-            print(f"  -> SUCCESS! Order ID: {res.get('id')} (Status: {res.get('status')})")
+            _log(f"  -> SUCCESS! Order ID: {res.get('id')} (Status: {res.get('status')})")
             success_count += 1
         else:
-            print(f"  -> FAILED: {res.get('message', res)}")
+            _log(f"  -> FAILED: {res.get('message', res)}")
             
     if success_count == len(legs):
-        print(f"\n🔥 All orders of the Synthetic {direction.upper()} Swap were successfully executed!")
+        _log(f"\n[SUCCESS] All orders of the Synthetic {direction.upper()} Swap were successfully executed!")
         return True
     else:
-        print(f"\n⚠️ Warning: Strategy execution incomplete. Only {success_count}/{len(legs)} legs placed successfully.")
+        _log(f"\n[WARNING] Strategy execution incomplete. Only {success_count}/{len(legs)} legs placed successfully.")
         return False
+
 
 def main():
     parser = argparse.ArgumentParser(description="Build and execute Option Synthetic Swaps (Long or Short) on Alpaca.")

@@ -19,3 +19,6 @@ active_pairs.json
 # IDE config
 .idea/
 .vscode/
+
+# Logs
+*.log
