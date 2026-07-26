@@ -7,7 +7,8 @@ __pycache__/
 # Local environment & config
 .env
 .streamlit/
-.mcp_config.json
+
+
 
 # Local databases, data files and cache
 screener_cache.json
@@ -23,3 +24,4 @@ active_pairs.json
 
 # Logs
 *.log
+/.agents/
