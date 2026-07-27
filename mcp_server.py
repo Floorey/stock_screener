@@ -48,14 +48,16 @@ def get_screener_scores() -> str:
         
         # Load cache into database rows
         rows = []
-        for ticker, data in cache_data.items():
-            if isinstance(data, dict):
+        for ticker, entry in cache_data.items():
+            if isinstance(entry, dict):
                 # Check structure (cache stores ticker name as key, metrics as values or info dict)
-                if "info" in data:
-                    rows.append(data["info"])
+                if "data" in entry:
+                    rows.append(entry["data"])
+                elif "info" in entry:
+                    rows.append(entry["info"])
                 else:
                     # Fallback for alternative cache structures
-                    item = data.copy()
+                    item = entry.copy()
                     item["Symbol"] = ticker
                     rows.append(item)
                     

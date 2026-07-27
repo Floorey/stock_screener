@@ -141,9 +141,12 @@ def scan_markets(multiplier: float = 3.0) -> str:
     with ThreadPoolExecutor(max_workers=10) as executor:
         futures = {executor.submit(check_ticker_vpei, ticker, multiplier): ticker for ticker in tickers}
         for future in as_completed(futures):
-            res = future.result()
-            if res:
-                signals.append(res)
+            try:
+                res = future.result()
+                if res:
+                    signals.append(res)
+            except Exception as e:
+                log_event(f"[ERROR] Scan failed for {futures[future]}: {e}")
                 
     if not signals:
         msg = f"=== Market Scan Completed ===\nVol-Faktor: {multiplier}x\nEs wurden keine Volumen-Spikes oder VPEI-Signale im Universum gefunden."
