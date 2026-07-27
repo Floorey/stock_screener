@@ -130,8 +130,16 @@ def get_market_clocks():
         if (market_start1 <= tokyo_time <= market_end1) or (market_start2 <= tokyo_time <= market_end2):
             tokyo_market_open = True
             
+    lon_market_open = False
+    if london_time.weekday() < 5:
+        market_start = london_time.replace(hour=8, minute=0, second=0)
+        market_end = london_time.replace(hour=16, minute=30, second=0)
+        if market_start <= london_time <= market_end:
+            lon_market_open = True
+            
     return clocks, {
         "NY": ny_market_open,
+        "LON": lon_market_open,
         "FFM": ffm_market_open,
         "TKY": tokyo_market_open
     }
@@ -630,8 +638,8 @@ def render_bloomberg_tab():
             <div style="margin: 5px 10px;">
                 <span class="bloomberg-gray-text">LONDON (GMT/BST)</span><br>
                 <span class="bloomberg-white-text" style="font-size:1.2rem; font-weight:bold;">{clocks["LONDON"]}</span><br>
-                <span class="{'bloomberg-green-text' if active_markets['NY'] else 'bloomberg-red-text'}" style="font-size:0.8rem; font-weight:bold;">
-                    {'● OPEN' if active_markets['NY'] else '○ CLOSED'}
+                <span class="{'bloomberg-green-text' if active_markets['LON'] else 'bloomberg-red-text'}" style="font-size:0.8rem; font-weight:bold;">
+                    {'● OPEN' if active_markets['LON'] else '○ CLOSED'}
                 </span>
             </div>
             <div style="margin: 5px 10px;">
