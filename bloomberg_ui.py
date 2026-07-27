@@ -1,4 +1,5 @@
 import streamlit as st
+import os
 import pandas as pd
 import yfinance as yf
 import datetime
@@ -1149,6 +1150,21 @@ def render_bloomberg_tab():
                     "<span style='color: #00ffff; font-weight: bold;'>[3] FALCONE ENGINE BACKGROUND SCANNER LOGS</span>"
                     "</div>", unsafe_allow_html=True)
         
+        # Add a trigger button for manual scanning
+        col_scan, col_info = st.columns([1, 2])
+        with col_scan:
+            if st.button("🔍 Markt-Scan jetzt starten", use_container_width=True):
+                with st.spinner("Falcone Engine scannt Märkte..."):
+                    try:
+                        from falcone_server import scan_markets
+                        scan_result = scan_markets()
+                        st.toast("Scan erfolgreich abgeschlossen!")
+                    except Exception as e:
+                        st.error(f"Scan-Fehler: {e}")
+        
+        with col_info:
+            st.info("💡 Starten Sie den Scanner extern für kontinuierliche Überwachung: `python falcone_server.py --scanner`", icon="🤖")
+
         log_file_path = os.path.join(os.path.dirname(__file__), "falcone_engine.log")
         if not os.path.exists(log_file_path):
             st.markdown("<div style='color: #ff3333; font-family: \"Courier New\", Courier, monospace;'>NO ACTIVE FALCONE ENGINE LOG FILE FOUND.</div>", unsafe_allow_html=True)

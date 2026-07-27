@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import requests
+import time
 import numpy as np
 import pandas as pd
 import yfinance as yf
@@ -168,6 +169,21 @@ def scan_markets(multiplier: float = 3.0) -> str:
     log_event(f"[INFO] scan_markets: Completed. Found {len(signals)} signals.")
     return "\n".join(lines)
 
+def run_scanner_loop(interval_minutes: int = 5):
+    """
+    Startet eine Endlosschleife, die den Markt-Scanner in regelmäßigen Abständen ausführt.
+    Diese Funktion ist für den Betrieb als Hintergrundprozess gedacht.
+    """
+    log_event(f"[SYSTEM] Falcone Background Scanner gestartet (Intervall: {interval_minutes} Min.)")
+    print(f"Falcone Background Scanner läuft... (Logs in falcone_engine.log)")
+    try:
+        while True:
+            scan_markets()
+            time.sleep(interval_minutes * 60)
+    except KeyboardInterrupt:
+        log_event("[SYSTEM] Falcone Background Scanner durch Benutzer beendet.")
+        print("Scanner beendet.")
+
 @mcp.tool(name="execute_signal", description="Nimmt ein validiertes Signal entgegen, berechnet die risikoadjustierte Positionsgröße und feuert die Order an den Broker ab.")
 def execute_signal(ticker: str, category: str, signal_price: float, stop_loss: float, target: float) -> str:
     """
@@ -301,6 +317,9 @@ if __name__ == "__main__":
     # Custom argument parsing to handle logging parameters before FastMCP/Click sees them
     log_level = "INFO"
     log_file = None
+    scanner_mode = False
+    interval = 5
+    
     new_args = []
     i = 1
     while i < len(sys.argv):
@@ -311,19 +330,31 @@ if __name__ == "__main__":
         elif arg == "--log-file" and i + 1 < len(sys.argv):
             log_file = sys.argv[i+1]
             i += 2
+        elif arg == "--scanner":
+            scanner_mode = True
+            i += 1
+        elif arg == "--interval" and i + 1 < len(sys.argv):
+            try:
+                interval = int(sys.argv[i+1])
+            except ValueError:
+                pass
+            i += 2
         else:
             new_args.append(arg)
             i += 1
     sys.argv = [sys.argv[0]] + new_args
 
-    if log_file:
-        import logging
-        numeric_level = getattr(logging, log_level, logging.INFO)
-        log_dir = os.path.dirname(log_file)
-        if log_dir and not os.path.exists(log_dir):
-            os.makedirs(log_dir, exist_ok=True)
-        logging.basicConfig(filename=log_file, level=numeric_level,
-                            format='[%(asctime)s] [%(levelname)s] %(message)s')
-        logging.info(f"Falcone Capital Engine MCP Server started with log level {log_level}")
+    if scanner_mode:
+        run_scanner_loop(interval)
+    else:
+        if log_file:
+            import logging
+            numeric_level = getattr(logging, log_level, logging.INFO)
+            log_dir = os.path.dirname(log_file)
+            if log_dir and not os.path.exists(log_dir):
+                os.makedirs(log_dir, exist_ok=True)
+            logging.basicConfig(filename=log_file, level=numeric_level,
+                                format='[%(asctime)s] [%(levelname)s] %(message)s')
+            logging.info(f"Falcone Capital Engine MCP Server started with log level {log_level}")
 
-    mcp.run()
+        mcp.run()
