@@ -19,6 +19,10 @@ import (
 // ErrBusy is returned by a manual trigger when a refresh is already queued.
 var ErrBusy = errors.New("poller: refresh already pending")
 
+// ErrNoPoller is returned when a series has no poller — typically because it is
+// fed by a stream, where "refresh" has no meaning.
+var ErrNoPoller = errors.New("poller: series is not polled")
+
 // Options configures a single poller.
 type Options struct {
 	Interval time.Duration
@@ -216,7 +220,7 @@ func (m *Manager) Trigger(name string) error {
 	m.mu.RUnlock()
 
 	if !ok {
-		return fmt.Errorf("poller: no poller for series %s", name)
+		return fmt.Errorf("%w: %s", ErrNoPoller, name)
 	}
 	return p.Trigger()
 }

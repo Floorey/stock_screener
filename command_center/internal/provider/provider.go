@@ -5,8 +5,14 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"time"
 )
+
+// ErrPermanent marks an error that retrying cannot fix — wrong credentials, a
+// missing data entitlement, an unsupported symbol. Supervisors stop
+// reconnecting when they see it instead of hammering the API forever.
+var ErrPermanent = errors.New("provider: permanent error")
 
 // Balance is the account snapshot shown in the header of the dashboard.
 type Balance struct {
@@ -80,4 +86,11 @@ type BalanceSource interface {
 // OrderbookSource provides orderbook snapshots for a symbol.
 type OrderbookSource interface {
 	Orderbook(ctx context.Context, symbol string) (Orderbook, error)
+}
+
+// OrderbookStreamSource is implemented by providers that can push orderbook
+// updates instead of being polled. Where this exists it is always preferred:
+// streaming costs no REST budget at all.
+type OrderbookStreamSource interface {
+	OrderbookStream(symbols []string) (Streamer, error)
 }
