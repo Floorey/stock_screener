@@ -1,0 +1,21 @@
+{
+  "addr": "127.0.0.1:8080",
+  "provider": "mock",
+  "log_level": "info",
+  "shutdown_timeout": "10s",
+  "series": {
+    "balance": {
+      "enabled": true,
+      "mode": "poll",
+      "interval": "5s",
+      "timeout": "2s",
+      "capacity": 720
+    },
+    "orderbook": {
+      "enabled": true,
+      "mode": "stream",
+      "capacity": 5000,
+      "symbols": ["SPY"]
+    }
+  }
+}

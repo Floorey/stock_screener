@@ -1,0 +1,27 @@
+{
+  "addr": "127.0.0.1:8080",
+  "provider": "mock",
+  "log_level": "info",
+  "shutdown_timeout": "10s",
+  "series": {
+    "balance": {
+      "enabled": true,
+      "mode": "poll",
+      "interval": "15s",
+      "timeout": "5s",
+      "capacity": 720
+    },
+    "orderbook": {
+      "enabled": true,
+      "mode": "poll",
+      "interval": "1s",
+      "timeout": "900ms",
+      "capacity": 1800,
+      "symbols": ["SPY"]
+    }
+  },
+  "alpaca": {
+    "base_url": "https://paper-api.alpaca.markets",
+    "data_url": "https://data.alpaca.markets"
+  }
+}
