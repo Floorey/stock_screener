@@ -5,6 +5,7 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -173,6 +174,11 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 
 	err := s.pollers.Trigger(series.Name())
 	switch {
+	case errors.Is(err, poller.ErrNoPoller):
+		// A streamed series updates itself; there is nothing to trigger.
+		s.writeError(w, http.StatusConflict, fmt.Errorf(
+			"series %s is stream-driven, refresh only applies to polled series",
+			series.Name()))
 	case errors.Is(err, poller.ErrBusy):
 		// Not an error condition for the caller: a refresh is already on its way.
 		writeJSON(w, s.log, http.StatusAccepted, map[string]any{

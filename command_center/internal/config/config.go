@@ -72,6 +72,10 @@ type Alpaca struct {
 	SecretKey string `json:"-"`
 	BaseURL   string `json:"base_url"`
 	DataURL   string `json:"data_url"`
+	// StreamURL is the market data websocket root.
+	StreamURL string `json:"stream_url"`
+	// Feed selects the equity data feed: "iex" (free) or "sip" (paid).
+	Feed string `json:"feed"`
 }
 
 // Configured reports whether both credentials are present.
@@ -118,8 +122,10 @@ func Default() Config {
 			},
 		},
 		Alpaca: Alpaca{
-			BaseURL: "https://paper-api.alpaca.markets",
-			DataURL: "https://data.alpaca.markets",
+			BaseURL:   "https://paper-api.alpaca.markets",
+			DataURL:   "https://data.alpaca.markets",
+			StreamURL: "wss://stream.data.alpaca.markets",
+			Feed:      "iex",
 		},
 	}
 }
@@ -167,6 +173,12 @@ func applyEnv(cfg *Config) {
 	if v := strings.TrimSpace(os.Getenv("ALPACA_DATA_URL")); v != "" {
 		cfg.Alpaca.DataURL = strings.TrimRight(v, "/")
 	}
+	if v := strings.TrimSpace(os.Getenv("ALPACA_STREAM_URL")); v != "" {
+		cfg.Alpaca.StreamURL = strings.TrimRight(v, "/")
+	}
+	if v := strings.TrimSpace(os.Getenv("ALPACA_FEED")); v != "" {
+		cfg.Alpaca.Feed = strings.ToLower(v)
+	}
 }
 
 // Validate checks the configuration for contradictions.
@@ -209,16 +221,39 @@ func (c *Config) Validate() error {
 				errs = append(errs, fmt.Errorf("series %s: timeout must not be negative", name))
 			}
 		case "stream":
+			if len(sc.Symbols) == 0 {
+				errs = append(errs, fmt.Errorf("series %s: stream mode requires at least one symbol", name))
+			}
 		default:
 			errs = append(errs, fmt.Errorf("series %s: unknown mode %q (want poll or stream)", name, sc.Mode))
 		}
 	}
 
-	if c.Provider == "alpaca" && !c.Alpaca.Configured() {
-		errs = append(errs, errors.New("provider alpaca requires ALPACA_API_KEY and ALPACA_SECRET_KEY"))
+	if c.Provider == "alpaca" {
+		if !c.Alpaca.Configured() {
+			errs = append(errs, errors.New("provider alpaca requires ALPACA_API_KEY and ALPACA_SECRET_KEY"))
+		}
+		switch c.Alpaca.Feed {
+		case "iex", "sip":
+		default:
+			errs = append(errs, fmt.Errorf("alpaca: unknown feed %q (want iex or sip)", c.Alpaca.Feed))
+		}
+		if c.Alpaca.StreamURL == "" && c.hasStreamSeries() {
+			errs = append(errs, errors.New("alpaca: stream_url is required when a series uses stream mode"))
+		}
 	}
 
 	return errors.Join(errs...)
+}
+
+// hasStreamSeries reports whether any enabled series is push-driven.
+func (c *Config) hasStreamSeries() bool {
+	for _, sc := range c.Series {
+		if sc.Enabled && sc.Mode == "stream" {
+			return true
+		}
+	}
+	return false
 }
 
 // FetchTimeout returns the effective per-fetch timeout for a series.

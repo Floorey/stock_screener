@@ -21,7 +21,9 @@ import (
 	"github.com/Floorey/stock_screener/command_center/internal/httpapi"
 	"github.com/Floorey/stock_screener/command_center/internal/poller"
 	"github.com/Floorey/stock_screener/command_center/internal/provider"
+	"github.com/Floorey/stock_screener/command_center/internal/provider/alpaca"
 	"github.com/Floorey/stock_screener/command_center/internal/provider/mock"
+	"github.com/Floorey/stock_screener/command_center/internal/streamer"
 )
 
 func main() {
@@ -45,8 +47,9 @@ func run() error {
 
 	store := buffer.NewStore()
 	pollers := poller.NewManager()
+	streams := streamer.NewManager()
 
-	if err := wireSeries(cfg, store, pollers, log); err != nil {
+	if err := wireSeries(cfg, store, pollers, streams, log); err != nil {
 		return err
 	}
 
@@ -67,6 +70,7 @@ func run() error {
 	defer stop()
 
 	pollers.Start(ctx)
+	streams.Start(ctx)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -96,14 +100,24 @@ func run() error {
 	}
 	stop()
 	pollers.Wait()
+	streams.Wait()
 	log.Info("stopped cleanly")
 	return nil
 }
 
-// wireSeries builds one buffer.Series (and, in poll mode, one poller) per
-// configured and enabled data source.
-func wireSeries(cfg config.Config, store *buffer.Store, pollers *poller.Manager, log *slog.Logger) error {
-	balanceSrc, bookSrc, err := buildProvider(cfg, log)
+// sources bundles the capabilities of the selected provider. A provider may
+// implement only some of them; the wiring reports a clear error rather than
+// silently skipping a series.
+type sources struct {
+	balance provider.BalanceSource
+	book    provider.OrderbookSource
+	stream  provider.OrderbookStreamSource
+}
+
+// wireSeries builds one buffer.Series per enabled data source and attaches the
+// matching producer: a poller in "poll" mode, a stream runner in "stream" mode.
+func wireSeries(cfg config.Config, store *buffer.Store, pollers *poller.Manager, streams *streamer.Manager, log *slog.Logger) error {
+	src, err := buildProvider(cfg, log)
 	if err != nil {
 		return err
 	}
@@ -123,13 +137,13 @@ func wireSeries(cfg config.Config, store *buffer.Store, pollers *poller.Manager,
 		}
 
 		if sc.Mode == "stream" {
-			// Streaming sources are attached in the websocket stage; the buffer
-			// already exists so consumers can subscribe today.
-			log.Info("series registered in stream mode (no poller)", "series", name)
+			if err := attachStream(series, sc, src, streams, log); err != nil {
+				return err
+			}
 			continue
 		}
 
-		fetcher, err := fetcherFor(name, sc, balanceSrc, bookSrc)
+		fetcher, err := fetcherFor(name, sc, src)
 		if err != nil {
 			return err
 		}
@@ -153,33 +167,83 @@ func wireSeries(cfg config.Config, store *buffer.Store, pollers *poller.Manager,
 	return nil
 }
 
-func buildProvider(cfg config.Config, log *slog.Logger) (provider.BalanceSource, provider.OrderbookSource, error) {
+// attachStream wires a push-based producer. Only the orderbook is streamable
+// today — balance has no streaming counterpart at Alpaca.
+func attachStream(series *buffer.Series, sc config.SeriesConfig, src sources, streams *streamer.Manager, log *slog.Logger) error {
+	if series.Name() != config.SeriesOrderbook {
+		return fmt.Errorf("series %s: stream mode is only supported for %s",
+			series.Name(), config.SeriesOrderbook)
+	}
+	if src.stream == nil {
+		return fmt.Errorf("series %s: provider does not support streaming, use \"mode\": \"poll\"",
+			series.Name())
+	}
+
+	stream, err := src.stream.OrderbookStream(sc.Symbols)
+	if err != nil {
+		return fmt.Errorf("series %s: %w", series.Name(), err)
+	}
+	if ls, ok := stream.(interface{ SetLogger(*slog.Logger) }); ok {
+		ls.SetLogger(log)
+	}
+
+	runner, err := streamer.New(series, stream, streamer.Options{
+		MinBackoff:  time.Second,
+		MaxBackoff:  2 * time.Minute,
+		StableAfter: 30 * time.Second,
+	}, log)
+	if err != nil {
+		return err
+	}
+	if err := streams.Add(runner); err != nil {
+		return err
+	}
+	log.Info("series streaming", "series", series.Name(), "symbols", sc.Symbols)
+	return nil
+}
+
+func buildProvider(cfg config.Config, log *slog.Logger) (sources, error) {
 	switch cfg.Provider {
 	case "mock":
 		m := mock.New(0)
 		log.Info("using mock provider (no broker credentials required)")
-		return m, m, nil
+		return sources{balance: m, book: m, stream: m}, nil
+
 	case "alpaca":
-		// Implemented in the next step (endpoint by endpoint).
-		return nil, nil, errors.New("provider alpaca: not implemented yet, use provider=mock")
+		client, err := alpaca.NewClient(alpaca.Config{
+			KeyID:     cfg.Alpaca.KeyID,
+			SecretKey: cfg.Alpaca.SecretKey,
+			BaseURL:   cfg.Alpaca.BaseURL,
+			DataURL:   cfg.Alpaca.DataURL,
+			StreamURL: cfg.Alpaca.StreamURL,
+			Feed:      cfg.Alpaca.Feed,
+		})
+		if err != nil {
+			return sources{}, err
+		}
+		log.Info("using alpaca provider",
+			"base_url", cfg.Alpaca.BaseURL,
+			"feed", cfg.Alpaca.Feed)
+		return sources{balance: client, book: client, stream: client}, nil
+
 	default:
-		return nil, nil, fmt.Errorf("unknown provider %q", cfg.Provider)
+		return sources{}, fmt.Errorf("unknown provider %q", cfg.Provider)
 	}
 }
 
 // fetcherFor maps a series name to the provider call that feeds it.
-func fetcherFor(name string, sc config.SeriesConfig, balanceSrc provider.BalanceSource, bookSrc provider.OrderbookSource) (provider.Fetcher, error) {
+func fetcherFor(name string, sc config.SeriesConfig, src sources) (provider.Fetcher, error) {
 	switch name {
 	case config.SeriesBalance:
-		if balanceSrc == nil {
+		if src.balance == nil {
 			return nil, errors.New("series balance: provider has no balance source")
 		}
 		return provider.FetchFunc(func(ctx context.Context) (any, error) {
-			return balanceSrc.Balance(ctx)
+			return src.balance.Balance(ctx)
 		}), nil
 
 	case config.SeriesOrderbook:
-		if bookSrc == nil {
+		if src.book == nil {
 			return nil, errors.New("series orderbook: provider has no orderbook source")
 		}
 		if len(sc.Symbols) == 0 {
@@ -188,7 +252,7 @@ func fetcherFor(name string, sc config.SeriesConfig, balanceSrc provider.Balance
 		// MVP: one symbol per series. Multi-symbol becomes one series per symbol.
 		symbol := sc.Symbols[0]
 		return provider.FetchFunc(func(ctx context.Context) (any, error) {
-			return bookSrc.Orderbook(ctx, symbol)
+			return src.book.Orderbook(ctx, symbol)
 		}), nil
 
 	default:

@@ -88,7 +88,11 @@ func (p *Provider) Orderbook(ctx context.Context, symbol string) (provider.Order
 	if p.shouldFail() {
 		return provider.Orderbook{}, errSimulated
 	}
+	return p.buildBook(symbol), nil
+}
 
+// buildBook advances the synthetic mid and renders a book. Caller holds the lock.
+func (p *Provider) buildBook(symbol string) provider.Orderbook {
 	mid, ok := p.price[symbol]
 	if !ok {
 		mid = 400 + p.rr.Float64()*100
@@ -116,7 +120,53 @@ func (p *Provider) Orderbook(ctx context.Context, symbol string) (provider.Order
 			Size:  math.Round(50 + p.rr.Float64()*450),
 		})
 	}
-	return book, nil
+	return book
 }
 
 func round2(v float64) float64 { return math.Round(v*100) / 100 }
+
+// OrderbookStream returns a synthetic push source, so "mode": "stream" can be
+// exercised end to end without broker credentials.
+func (p *Provider) OrderbookStream(symbols []string) (provider.Streamer, error) {
+	if len(symbols) == 0 {
+		return nil, errors.New("mock: at least one symbol is required for streaming")
+	}
+	return &stream{
+		provider: p,
+		symbols:  append([]string(nil), symbols...),
+		interval: 250 * time.Millisecond,
+	}, nil
+}
+
+// stream emits synthetic orderbook updates on a fixed cadence.
+type stream struct {
+	provider *Provider
+	symbols  []string
+	interval time.Duration
+}
+
+// Run implements provider.Streamer.
+func (s *stream) Run(ctx context.Context, emit func(value any, ts time.Time)) error {
+	if emit == nil {
+		return errors.New("mock: emit callback must not be nil")
+	}
+	ticker := time.NewTicker(s.interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			// No failure injection here: a dropped connection is the
+			// interesting failure mode for a stream, and that is covered by
+			// the runner's reconnect test rather than by random noise.
+			for _, symbol := range s.symbols {
+				s.provider.mu.Lock()
+				book := s.provider.buildBook(symbol)
+				s.provider.mu.Unlock()
+				emit(book, book.Ts)
+			}
+		}
+	}
+}
