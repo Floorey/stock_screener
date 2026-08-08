@@ -24,4 +24,7 @@ active_pairs.json
 
 # Logs
 *.log
-/.agents/
+
+# Local agent config, except shared skills (Antigravity reads .agents/skills/)
+/.agents/*
+!/.agents/skills/
