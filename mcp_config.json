@@ -2,11 +2,11 @@
   "mcpServers": {
     "alpaca": {
       "command": "uvx",
-      "args": ["alpaca-mcp-server"],
+      "args": ["C:\\Users\\lukas\\alpaca-mcp-server\\alpaca-mcp-server.exe"],
       "env": {
-        "ALPACA_API_KEY": "PKHJGBKKLN2RBPNEW6CAMKIIKCJ",
-        "ALPACA_SECRET_KEY": "BhfYcVWsupiZq6Z8WUFD716m9CHYUf2UeoLKkmS1pphv",
-        "ALPACA_BASE_URL": "https://paper-api.alpaca.markets",
+        "ALPACA_API_KEY": "PKWAHDU5ZFBYGTUA7UIKE3CQ",
+        "ALPACA_SECRET_KEY": "7y9kHxmwzNjH9AyZ2vgc6FwwLGytcM94rcKRkrPVtqZo",
+        "ALPACA_BASE_URL": "https://paper-api.alpaca.markets/v2",
         "ALPACA_PAPER_TRADE": "true"
       }
     }

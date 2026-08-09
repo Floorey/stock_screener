@@ -65,9 +65,11 @@ class ExecutionAlgoManager:
         # Adjust for rounding errors
         diff = qty - np.sum(schedule)
         if diff != 0:
-            # Add/subtract the difference to the first/last intervals where volume is highest
-            schedule[0] += diff // 2
-            schedule[-1] += diff - (diff // 2)
+            # Distribute the remaining quantity to the first and last intervals
+            first_add = diff // 2
+            last_add = diff - first_add
+            schedule[0] += first_add
+            schedule[-1] += last_add
             
         return [max(1, q) for q in schedule]
 

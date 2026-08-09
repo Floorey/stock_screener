@@ -34,7 +34,8 @@ def calculate_black_scholes_delta(S, K, T, r, sigma, option_type="call"):
 def calculate_greeks(S, K, T, r, sigma, option_type="call"):
     """Calculates Delta, Gamma, Vega, Theta for options."""
     if T <= 0:
-        return {"delta": 0.0, "gamma": 0.0, "vega": 0.0, "theta": 0.0}
+        # At expiration, Greeks are mostly zero or undefined, returning 0.0 as safe fallback
+        return {"delta": calculate_black_scholes_delta(S, K, T, r, sigma, option_type), "gamma": 0.0, "vega": 0.0, "theta": 0.0}
         
     d1 = (np.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
     d2 = d1 - sigma * np.sqrt(T)
@@ -83,12 +84,19 @@ class StatisticalArbitrageLab:
     @staticmethod
     def calculate_pairs_metrics(df: pd.DataFrame, window: int = 20) -> pd.DataFrame:
         """Calculates spread, rolling mean, rolling std, and z-score."""
-        # We use a simple dynamic ratio hedge spread
-        # spread = Price_A - (Hedge Ratio * Price_B)
-        # For simplicity, we calculate the rolling hedge ratio as a rolling mean ratio
-        rolling_ratio = (df["Price_A"].rolling(window).mean() / df["Price_B"].rolling(window).mean())
+        # Using a rolling regression for a more robust hedge ratio instead of simple price ratio
+        def get_hedge_ratio(window_df):
+            if len(window_df) < 2: return 1.0
+            try:
+                # Price_A = beta * Price_B + alpha
+                beta, _ = np.polyfit(window_df["Price_B"], window_df["Price_A"], 1)
+                return beta
+            except:
+                return window_df["Price_A"].iloc[-1] / window_df["Price_B"].iloc[-1]
+
+        # This can be slow for large dataframes, but is more logically sound for pairs trading
+        df["Hedge_Ratio"] = [get_hedge_ratio(df.iloc[max(0, i-window+1):i+1]) for i in range(len(df))]
         
-        df["Hedge_Ratio"] = rolling_ratio.ffill().bfill()
         df["Spread"] = df["Price_A"] - (df["Hedge_Ratio"] * df["Price_B"])
         
         df["Spread_Mean"] = df["Spread"].rolling(window).mean()

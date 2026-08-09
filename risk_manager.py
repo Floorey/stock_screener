@@ -141,6 +141,9 @@ def calculate_portfolio_var(positions: list[dict], confidence=0.95) -> tuple[flo
     Returns (VaR_USD, VaR_Percent)
     """
     total_val = sum(abs(p["market_value"]) for p in positions)
+    # Net exposure is used for VaR calculation to account for hedges
+    net_val = sum(p["market_value"] for p in positions)
+    
     if total_val == 0:
         return 0.0, 0.0
         
@@ -166,11 +169,12 @@ def calculate_portfolio_var(positions: list[dict], confidence=0.95) -> tuple[flo
         df_rets = pd.DataFrame(hist_data)
         
         # Calculate portfolio returns
-        # Weight each asset by its relative absolute market value
+        # Weight each asset by its relative market value (including sign for shorts/hedges)
         weights = {}
         for p in positions:
             u = p["underlying"]
-            w = abs(p["market_value"]) / total_val
+            # Use signed market value to account for hedging effect
+            w = p["market_value"] / total_val
             # Accumulate weight for underlying
             weights[u] = weights.get(u, 0.0) + w
             
@@ -188,6 +192,7 @@ def calculate_portfolio_var(positions: list[dict], confidence=0.95) -> tuple[flo
     
     # 1-day VaR
     var_pct = z * std_dev
+    # VaR in USD should be based on the absolute total value at risk
     var_usd = total_val * var_pct
     
     return var_usd, var_pct
@@ -245,6 +250,7 @@ def run_stress_test(positions: list[dict]) -> list[dict]:
                 shock = sc["commodity_shock"]
             else:
                 # Equities: apply market shock weighted by beta
+                # A shock of -20% on market with beta 1.5 results in -30% shock
                 shock = sc["equity_shock"] * beta
                 
             # Calculate position change

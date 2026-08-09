@@ -202,7 +202,13 @@ class MarketHedger:
             status_c, res_c = place_alpaca_order(c_symbol, qty, "sell", "limit", c_bid)
             if status_c not in [200, 201]:
                 print(f"FAILED: Leg 2 Sell Call: {res_c.get('message', res_c)}")
-                print("Warning: Leg 1 was filled. You are holding a single Put option.")
+                print("Warning: Leg 1 (Put) was filled but Leg 2 (Call) failed. Attempting to liquidate Leg 1 to prevent unintended exposure...")
+                # Attempt to sell the put back to close the position
+                status_close, res_close = place_alpaca_order(p_symbol, qty, "sell", "market")
+                if status_close in [200, 201]:
+                    print("SUCCESS: Leg 1 liquidated.")
+                else:
+                    print(f"CRITICAL: Failed to liquidate Leg 1: {res_close.get('message', res_close)}")
                 return False
                 
             print(f"SUCCESS: Synthetic Short option spread placed successfully on {self.ticker}!")

@@ -12,7 +12,8 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 # Alpaca / Portfolio Imports
-from alpaca_trader import is_alpaca_configured, get_positions
+from alpaca_trader import is_alpaca_configured, get_positions, get_account_activities
+from quant_analyst_report import generate_quant_report
 from track_record_generator import get_alpaca_portfolio_history
 from risk_manager import parse_osi_symbol
 
@@ -276,7 +277,7 @@ def calculate_detailed_metrics(prices_series: pd.Series, spy_returns: pd.Series 
         "alpha": alpha
     }
 
-def generate_reportlab_pdf(df_history, metrics_data, period_str) -> bytes:
+def generate_reportlab_pdf(df_history, metrics_data, period_str, quant_report=None) -> bytes:
     """
     Generates a beautifully designed DC Comic style / Arkham Research dossier PDF.
     Returns the PDF as raw bytes.
@@ -434,6 +435,37 @@ def generate_reportlab_pdf(df_history, metrics_data, period_str) -> bytes:
     ]))
     story.append(metrics_table)
     story.append(Spacer(1, 15))
+    
+    # Quant Analyst Section
+    if quant_report and "trades" in quant_report:
+        story.append(Paragraph("QUANT ANALYST TRADE CATEGORIZATION", h1_style))
+        trades_df = quant_report["trades"]
+        if not trades_df.empty:
+            q_table_data = [["Symbol", "Realized P/L %", "Category"]]
+            for _, row in trades_df.iterrows():
+                q_table_data.append([
+                    row["Symbol"],
+                    f"{row['Realized P/L %']:+.2f}%",
+                    row["Category"]
+                ])
+            
+            q_table = Table(q_table_data, colWidths=[180, 180, 180])
+            q_table.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1a1a24')),
+                ('TEXTCOLOR', (0,0), (-1,0), colors.HexColor('#ffea00')),
+                ('ALIGN', (0,0), (-1,-1), 'LEFT'),
+                ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0,0), (-1,-1), 9),
+                ('GRID', (0,0), (-1,-1), 1, colors.HexColor('#ff0055')),
+                ('BACKGROUND', (0,1), (-1,-1), colors.HexColor('#0f0f15')),
+                ('TEXTCOLOR', (0,1), (-1,-1), colors.HexColor('#e5e7eb')),
+            ]))
+            story.append(q_table)
+            story.append(Spacer(1, 10))
+            
+        story.append(Paragraph("STRATEGIE-EMPFEHLUNG (NÄCHSTE 2 WOCHEN)", h1_style))
+        story.append(Paragraph(quant_report.get("strategy", "Keine Empfehlung verfügbar."), body_style))
+        story.append(Spacer(1, 15))
     
     # Performance Chart Section
     story.append(Paragraph("KUMULATIVE WERTENTWICKLUNG (RE-BASED AUF 100)", h1_style))
@@ -872,6 +904,26 @@ def render_performance_tab():
         # Style table using standard dataframe display with full container width
         st.dataframe(df_table, hide_index=True, use_container_width=True)
         
+        # 3.5 Quant Analyst Report Section
+        st.markdown('<div class="warning-strip"></div>', unsafe_allow_html=True)
+        st.markdown("### 🧪 Quant Analyst Report")
+        
+        quant_report = generate_quant_report()
+        if "error" in quant_report:
+            st.warning(f"Quant Report konnte nicht vollständig geladen werden: {quant_report['error']}")
+        else:
+            col_q1, col_q2 = st.columns([2, 1])
+            with col_q1:
+                st.markdown("#### 📊 Trade-Kategorisierung")
+                st.dataframe(quant_report["trades"], use_container_width=True)
+            with col_q2:
+                st.markdown("#### 📋 Zusammenfassung")
+                for k, v in quant_report["summary"].items():
+                    st.metric(k, v)
+            
+            st.markdown("#### 🎯 Strategie-Empfehlung (Nächste 2 Wochen)")
+            st.info(quant_report["strategy"])
+        
         # 4. Generate & Download PDF Report
         st.markdown('<div class="warning-strip"></div>', unsafe_allow_html=True)
         st.markdown("#### 📄 Finanzbericht erzeugen & herunterladen")
@@ -879,7 +931,7 @@ def render_performance_tab():
         
         # Download button
         try:
-            pdf_bytes = generate_reportlab_pdf(df_all, metrics_data, period_choice)
+            pdf_bytes = generate_reportlab_pdf(df_all, metrics_data, period_choice, quant_report=quant_report if 'quant_report' in locals() else None)
             
             st.download_button(
                 label="🦇 DOWNLOAD ARKHAM INTELLIGENCE DOSSIER (PDF)",
