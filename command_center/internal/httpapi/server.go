@@ -3,14 +3,17 @@
 package httpapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Floorey/stock_screener/command_center/internal/buffer"
+	"github.com/Floorey/stock_screener/command_center/internal/metrics"
 	"github.com/Floorey/stock_screener/command_center/internal/poller"
 )
 
@@ -20,18 +23,53 @@ type Server struct {
 	pollers *poller.Manager
 	log     *slog.Logger
 	started time.Time
+
+	// metrics is nil when the Prometheus endpoint is switched off; every use
+	// site checks for that rather than paying for a no-op recorder.
+	metrics     *metrics.Collector
+	metricsPath string
+}
+
+// Option customises the server. Options exist so the metrics endpoint can be
+// added without every caller having to care about it.
+type Option func(*Server) error
+
+// WithMetrics serves a Prometheus scrape endpoint at path and records request
+// metrics. Grafana scrapes this; the data comes from the same buffer the REST
+// API reads, so a scrape never reaches a broker API.
+func WithMetrics(collector *metrics.Collector, path string) Option {
+	return func(s *Server) error {
+		if collector == nil {
+			return errors.New("httpapi: metrics collector must not be nil")
+		}
+		if !strings.HasPrefix(path, "/") {
+			return fmt.Errorf("httpapi: metrics path %q must start with /", path)
+		}
+		if strings.HasPrefix(path, "/api/") {
+			return fmt.Errorf("httpapi: metrics path %q collides with the REST API", path)
+		}
+		s.metrics = collector
+		s.metricsPath = path
+		return nil
+	}
 }
 
 // NewServer wires the HTTP layer. store is required; pollers may be nil if no
 // pull-based source is configured.
-func NewServer(store *buffer.Store, pollers *poller.Manager, log *slog.Logger) (*Server, error) {
+func NewServer(store *buffer.Store, pollers *poller.Manager, log *slog.Logger, opts ...Option) (*Server, error) {
 	if store == nil {
 		return nil, errors.New("httpapi: store must not be nil")
 	}
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Server{store: store, pollers: pollers, log: log, started: time.Now()}, nil
+	s := &Server{store: store, pollers: pollers, log: log, started: time.Now()}
+	for _, opt := range opts {
+		if err := opt(s); err != nil {
+			return nil, err
+		}
+	}
+	return s, nil
 }
 
 // Handler returns the root handler with all routes and middleware applied.
@@ -44,7 +82,28 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/series/{name}/history", s.handleHistory)
 	mux.HandleFunc("POST /api/series/{name}/refresh", s.handleRefresh)
 
-	return s.recoverPanic(s.logRequests(mux))
+	if s.metrics != nil {
+		mux.HandleFunc("GET "+s.metricsPath, s.handleMetrics)
+	}
+
+	return s.recordMetrics(s.recoverPanic(s.logRequests(mux)))
+}
+
+// handleMetrics writes one Prometheus scrape. The body is rendered into memory
+// first so a slow scraper cannot leave a half-written exposition on the wire.
+func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	var buf bytes.Buffer
+	if _, err := s.metrics.WriteTo(&buf); err != nil {
+		s.log.Error("render metrics", "err", err)
+		s.writeError(w, http.StatusInternalServerError,
+			errors.New("failed to render metrics"))
+		return
+	}
+	w.Header().Set("Content-Type", metrics.ContentType)
+	w.WriteHeader(http.StatusOK)
+	if _, err := w.Write(buf.Bytes()); err != nil {
+		s.log.Error("write metrics", "err", err)
+	}
 }
 
 type errorBody struct {

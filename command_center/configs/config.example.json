@@ -3,23 +3,25 @@
   "provider": "mock",
   "log_level": "info",
   "shutdown_timeout": "10s",
-  "metrics": {
-    "enabled": true,
-    "path": "/metrics"
-  },
   "series": {
     "balance": {
       "enabled": true,
       "mode": "poll",
-      "interval": "5s",
-      "timeout": "2s",
+      "interval": "15s",
+      "timeout": "5s",
       "capacity": 720
     },
     "orderbook": {
       "enabled": true,
-      "mode": "stream",
-      "capacity": 5000,
+      "mode": "poll",
+      "interval": "1s",
+      "timeout": "900ms",
+      "capacity": 1800,
       "symbols": ["SPY"]
     }
+  },
+  "alpaca": {
+    "base_url": "https://paper-api.alpaca.markets",
+    "data_url": "https://data.alpaca.markets"
   }
 }

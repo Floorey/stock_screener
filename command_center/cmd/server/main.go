@@ -19,6 +19,7 @@ import (
 	"github.com/Floorey/stock_screener/command_center/internal/buffer"
 	"github.com/Floorey/stock_screener/command_center/internal/config"
 	"github.com/Floorey/stock_screener/command_center/internal/httpapi"
+	"github.com/Floorey/stock_screener/command_center/internal/metrics"
 	"github.com/Floorey/stock_screener/command_center/internal/poller"
 	"github.com/Floorey/stock_screener/command_center/internal/provider"
 	"github.com/Floorey/stock_screener/command_center/internal/provider/alpaca"
@@ -53,7 +54,17 @@ func run() error {
 		return err
 	}
 
-	api, err := httpapi.NewServer(store, pollers, log)
+	var apiOpts []httpapi.Option
+	if cfg.Metrics.Enabled {
+		collector, err := metrics.NewCollector(store)
+		if err != nil {
+			return fmt.Errorf("metrics: %w", err)
+		}
+		apiOpts = append(apiOpts, httpapi.WithMetrics(collector, cfg.Metrics.Path))
+		log.Info("prometheus metrics enabled", "path", cfg.Metrics.Path)
+	}
+
+	api, err := httpapi.NewServer(store, pollers, log, apiOpts...)
 	if err != nil {
 		return fmt.Errorf("http api: %w", err)
 	}

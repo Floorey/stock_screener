@@ -1,0 +1,57 @@
+# Prometheus + Grafana for the command center.
+#
+# The Go service is NOT part of this stack — it runs on the host (or wherever
+# you deploy it) and is scraped over the network. Run it with
+#
+#     CC_ADDR=0.0.0.0:8080 go run ./cmd/server -config configs/config.alpaca.json
+#
+# The default listen address is 127.0.0.1:8080, which a container cannot reach.
+#
+#     docker compose -f deploy/docker-compose.yml up -d
+#     open http://localhost:3000   (admin / admin on first login)
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: cc-prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      # Orderbook series are sampled every second; a short retention keeps the
+      # local volume small. Raise it if you want more than two weeks of history.
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+    extra_hosts:
+      # Lets the scrape config say host.docker.internal on Linux too; on Docker
+      # Desktop (Windows/macOS) the name already resolves.
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: cc-grafana
+    depends_on:
+      - prometheus
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      # Change these before exposing Grafana beyond localhost.
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    restart: unless-stopped
+
+volumes:
+  prometheus-data:
+  grafana-data:
