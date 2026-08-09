@@ -1,0 +1,16 @@
+apiVersion: 1
+
+datasources:
+  - name: Command Center Prometheus
+    # The dashboards reference this uid, so keep it stable.
+    uid: cc-prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      # Must match scrape_interval in prometheus.yml, otherwise Grafana picks
+      # bad default step sizes for rate() windows.
+      timeInterval: 5s
+      httpMethod: POST
