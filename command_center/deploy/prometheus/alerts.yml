@@ -1,0 +1,143 @@
+# Alert rules for the command center.
+#
+# The theme throughout: a dashboard that shows a stale number without saying so
+# is worse than one that shows nothing. Everything below fires on freshness and
+# error behaviour of the data pipeline, not on the market values themselves —
+# with one deliberate exception at the bottom.
+#
+# Prometheus only evaluates these; routing them to a chat or a phone needs
+# Alertmanager. Grafana can also alert directly off the same expressions.
+
+groups:
+  - name: command-center-availability
+    rules:
+      - alert: CommandCenterDown
+        expr: up{job="command_center"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Command center is not answering scrapes
+          description: >-
+            The backend at {{ $labels.instance }} has been unreachable for a
+            minute. The dashboard is serving nothing.
+
+      - alert: CommandCenterRestarted
+        expr: changes(cc_start_time_seconds[10m]) > 0
+        labels:
+          severity: info
+        annotations:
+          summary: Command center restarted
+          description: >-
+            The process start time changed in the last 10 minutes. Ring buffers
+            are in-memory only, so all history before the restart is gone.
+
+  - name: command-center-freshness
+    rules:
+      # Polled series carry their cadence in cc_series_interval_seconds, so one
+      # rule covers every one of them no matter how it is configured.
+      - alert: PolledSeriesStale
+        expr: >-
+          (cc_series_staleness_seconds > 4 * cc_series_interval_seconds)
+          and (cc_series_interval_seconds > 0)
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Series {{ $labels.series }} is stale
+          description: >-
+            Newest sample is {{ $value | printf "%.0f" }}s old, more than four
+            poll intervals. The buffer is still serving its last valid value —
+            what is on screen is no longer current.
+
+      # Streamed series have no cadence to miss, so they need a flat threshold.
+      # A quiet market genuinely produces no quotes; 60s is a compromise. Raise
+      # it for thin instruments, lower it for crypto.
+      - alert: StreamedSeriesSilent
+        expr: >-
+          (cc_series_staleness_seconds > 60)
+          and (cc_series_interval_seconds == 0)
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Stream {{ $labels.series }} has gone quiet
+          description: >-
+            No pushed sample for {{ $value | printf "%.0f" }}s. Either the
+            market is idle or the websocket is up but no longer delivering.
+
+      - alert: SeriesNeverStarted
+        # `on(job, instance)` is required: cc_uptime_seconds has no `series`
+        # label, so the default all-labels match would never pair the two.
+        expr: >-
+          cc_series_updates_total == 0
+          and on(job, instance) (cc_uptime_seconds > 120)
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Series {{ $labels.series }} never produced a sample
+          description: >-
+            Two minutes after start this series is still empty. Usually wrong
+            credentials, a missing data entitlement, or an unsupported symbol.
+
+  - name: command-center-errors
+    rules:
+      - alert: SeriesErrorStreak
+        expr: cc_series_consecutive_errors >= 5
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Series {{ $labels.series }} is failing repeatedly
+          description: >-
+            {{ $value }} consecutive failed fetches. The producer has backed off
+            exponentially, so recovery will lag behind the upstream fix.
+
+      - alert: SeriesErrorRateHigh
+        expr: rate(cc_series_errors_total[5m]) > 0.2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Series {{ $labels.series }} error rate is high
+          description: >-
+            {{ $value | printf "%.2f" }} errors/s over 5 minutes. Check for rate
+            limiting before assuming the API is broken.
+
+      - alert: HandlerPanic
+        expr: increase(cc_http_handler_panics_total[10m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: A request handler panicked
+          description: >-
+            The recovery middleware caught a panic, so the process survived.
+            That is a bug — check the logs for the stack trace.
+
+      - alert: HTTPServerErrors
+        expr: >-
+          sum(rate(cc_http_requests_total{status=~"5.."}[5m])) by (route) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 5xx responses on {{ $labels.route }}
+          description: >-
+            {{ $value | printf "%.2f" }} server errors/s over 5 minutes.
+
+  - name: command-center-market
+    rules:
+      # The one rule about market data rather than pipeline health. The
+      # threshold is instrument-specific — 50bps is wide for SPY and normal for
+      # an illiquid name. Tune it or drop the rule.
+      - alert: OrderbookSpreadWide
+        expr: cc_orderbook_spread_bps > 50
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: Wide spread on {{ $labels.symbol }}
+          description: >-
+            Top-of-book spread has been {{ $value | printf "%.1f" }}bps for five
+            minutes. Execution assumptions built on a tight spread do not hold.

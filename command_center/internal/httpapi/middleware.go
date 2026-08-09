@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"runtime/debug"
+	"strings"
 	"time"
 )
 
@@ -51,6 +52,9 @@ func (s *Server) recoverPanic(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
+				if s.metrics != nil {
+					s.metrics.HTTP().Panic()
+				}
 				s.log.Error("panic in handler",
 					"path", r.URL.Path,
 					"panic", rec,
@@ -61,4 +65,51 @@ func (s *Server) recoverPanic(next http.Handler) http.Handler {
 		}()
 		next.ServeHTTP(w, r)
 	})
+}
+
+// recordMetrics feeds the Prometheus collector. It sits outside recoverPanic so
+// a recovered panic is already reflected as a 500 in the status recorder,
+// instead of having to guess the outcome of a request that never returned.
+func (s *Server) recordMetrics(next http.Handler) http.Handler {
+	if s.metrics == nil {
+		return next
+	}
+	stats := s.metrics.HTTP()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer stats.Begin()()
+
+		started := time.Now()
+		rec := &statusRecorder{ResponseWriter: w}
+		next.ServeHTTP(rec, r)
+
+		status := rec.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		stats.Observe(r.Method, s.routeLabel(r.URL.Path), status,
+			time.Since(started))
+	})
+}
+
+// routeLabel maps a request path to the route pattern that served it. Using the
+// raw path would let any client mint new Prometheus time series by requesting
+// garbage; anything unrecognised collapses into a single "other" bucket.
+func (s *Server) routeLabel(path string) string {
+	switch path {
+	case "/api/health", "/api/series":
+		return path
+	case s.metricsPath:
+		return path
+	}
+
+	const prefix = "/api/series/"
+	if rest, ok := strings.CutPrefix(path, prefix); ok {
+		if name, action, found := strings.Cut(rest, "/"); found && name != "" {
+			switch action {
+			case "latest", "history", "refresh":
+				return prefix + "{name}/" + action
+			}
+		}
+	}
+	return "other"
 }
