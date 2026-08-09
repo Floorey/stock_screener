@@ -11,6 +11,7 @@ Gemini CLI, so one authored copy serves all three.
 | Skill | What it is |
 |---|---|
 | `high-frequency-trading` | Reference knowledge on HFT, algorithmic trading and equity market microstructure, distilled from Gomber, Arndt, Lutat & Uhle (2011) plus a file tracking what changed since. |
+| `pdf-analyzer` | How this repo's `pdf_analyzer.py` extraction pipeline works — the `pages_data` contract, the metric patterns, the documented extraction failure modes, and a characterization harness for verifying changes. |
 
 ## Where each agent looks
 
