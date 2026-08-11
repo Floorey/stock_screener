@@ -9,22 +9,10 @@ import re
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-import polars as pl
-import numpy as np
-from alpaca_trader import is_alpaca_configured, get_positions, get_account_info, place_statarb_pair_order
+from alpaca_trader import is_alpaca_configured, get_positions, get_account_info
 from macro_fetcher import fetch_company_news
 from execution_algo import ExecutionAlgoManager
 from pairs_tracker import load_active_pairs, get_pair_realtime_metrics
-from statarb_engine import (
-    compute_vwap_spread,
-    compute_volume_weighted_zscore,
-    compute_cvd,
-    compute_volume_profile,
-    run_statarb_backtest,
-    standardize_ticker_data,
-    scan_pair_universe,
-    DEFAULT_SECTOR_PAIRS
-)
 
 MOCK_PORTFOLIO = [
     {"symbol": "AAPL", "qty": 100.0, "avg_entry_price": 175.50, "name": "Apple Inc."},
@@ -557,599 +545,6 @@ def make_heatmap_html(ticker_data):
     html += '</div>'
     return clean_html(html)
 
-def fetch_statarb_pair_history(
-    ticker_a: str,
-    ticker_b: str,
-    period: str = "1y"
-) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame], Optional[str]]:
-    """
-    Fetches historical OHLCV data for pair tickers with error handling and fallback simulation.
-    """
-    def _create_synthetic_history(base_price: float, vol_factor: float = 1.0, n_bars: int = 252) -> pd.DataFrame:
-        dates = pd.date_range(end=pd.Timestamp.now().normalize(), periods=n_bars, freq="B")
-        seed = int(abs(hash(ticker_a + ticker_b + str(base_price)))) % (2**31)
-        rng = np.random.default_rng(seed)
-        rets = rng.normal(0.0004, 0.015 * vol_factor, n_bars)
-        price = base_price * np.exp(np.cumsum(rets))
-        high = price * (1.0 + np.abs(rng.normal(0.005, 0.003, n_bars)))
-        low = price * (1.0 - np.abs(rng.normal(0.005, 0.003, n_bars)))
-        open_px = low + (high - low) * rng.uniform(0.2, 0.8, n_bars)
-        vol = rng.uniform(500000, 5000000, n_bars) * vol_factor
-        return pd.DataFrame({
-            "Open": open_px,
-            "High": high,
-            "Low": low,
-            "Close": price,
-            "Volume": vol
-        }, index=dates)
-
-    df_a, df_b = None, None
-    err_msg = None
-    try:
-        t_a = yf.Ticker(ticker_a)
-        df_a = t_a.history(period=period)
-    except Exception as e:
-        err_msg = str(e)
-
-    try:
-        t_b = yf.Ticker(ticker_b)
-        df_b = t_b.history(period=period)
-    except Exception as e:
-        err_msg = str(e)
-
-    # If yfinance returned empty data (offline or rate-limited), fallback to synthetic data
-    if df_a is None or df_a.empty or df_b is None or df_b.empty:
-        df_a = _create_synthetic_history(150.0, 1.0)
-        df_b = _create_synthetic_history(120.0, 1.15)
-        err_msg = f"Live market data unavailable for {ticker_a}/{ticker_b} (offline mode). Displaying simulated calibrated feed."
-
-    return df_a, df_b, err_msg
-
-def plot_statarb_spread_chart(spread_df: pl.DataFrame, ticker_a: str, ticker_b: str) -> io.BytesIO:
-    """Plots dual-axis/stacked subplot: VWAP prices of Asset A & Beta*Asset B on top, Spread S_t on bottom."""
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 5.5), sharex=True, gridspec_kw={'height_ratios': [2, 1]})
-    fig.patch.set_facecolor('#0c0c0c')
-    ax1.set_facecolor('#0c0c0c')
-    ax2.set_facecolor('#0c0c0c')
-    
-    dates = spread_df["date"].to_list()
-    vwap_a = spread_df["vwap_a"].to_numpy()
-    vwap_b = spread_df["vwap_b"].to_numpy()
-    betas = spread_df["beta"].to_numpy()
-    spread = spread_df["spread"].to_numpy()
-    
-    # Ax1: VWAP A and Beta*VWAP B
-    ax1.plot(dates, vwap_a, color='#FFB000', linewidth=1.5, label=f"VWAP {ticker_a}")
-    ax1.plot(dates, vwap_b * betas, color='#00D8FF', linewidth=1.5, label=f"Beta \u00b7 VWAP {ticker_b}")
-    ax1.set_title(f"DYNAMIC ROLLING VWAP: {ticker_a} vs. \u03b2 \u00b7 {ticker_b}", color='#FFB000', fontfamily='monospace', fontsize=10, fontweight='bold', pad=8)
-    ax1.grid(True, which='both', color='#1f1f1f', linestyle='--', linewidth=0.5)
-    ax1.legend(loc='upper left', facecolor='#0c0c0c', edgecolor='#333333', labelcolor='#e0e0e0', prop={'family': 'monospace', 'size': 8})
-    for spine in ax1.spines.values():
-        spine.set_color('#333333')
-    ax1.tick_params(colors='#888888', labelsize=8)
-    
-    # Ax2: Spread S_t
-    ax2.plot(dates, spread, color='#E0E0E0', linewidth=1.2, label=f"Spread S_t")
-    ax2.axhline(0, color='#555555', linestyle='-', linewidth=0.8)
-    ax2.fill_between(dates, spread, 0, where=(spread >= 0), color='#00FF66', alpha=0.15)
-    ax2.fill_between(dates, spread, 0, where=(spread < 0), color='#FF3333', alpha=0.15)
-    ax2.set_title(f"VWAP SPREAD S_t = VWAP_A - \u03b2 \u00b7 VWAP_B", color='#00D8FF', fontfamily='monospace', fontsize=9, fontweight='bold', pad=6)
-    ax2.grid(True, which='both', color='#1f1f1f', linestyle='--', linewidth=0.5)
-    for spine in ax2.spines.values():
-        spine.set_color('#333333')
-    ax2.tick_params(colors='#888888', labelsize=8)
-    plt.xticks(rotation=10)
-    for label in (ax1.get_xticklabels() + ax1.get_yticklabels() + ax2.get_xticklabels() + ax2.get_yticklabels()):
-        label.set_fontfamily('monospace')
-        
-    plt.tight_layout()
-    buf = io.BytesIO()
-    fig.savefig(buf, format='png', facecolor=fig.get_facecolor(), edgecolor='none', dpi=150)
-    buf.seek(0)
-    plt.close(fig)
-    return buf
-
-def plot_statarb_zscore_chart(z_df: pl.DataFrame, entry_z: float = 2.0, exit_z: float = 0.5, stop_z: float = 3.5) -> io.BytesIO:
-    """Plots Volume-Weighted Z-Score with entry/exit/stop horizontal threshold lines."""
-    fig, ax = plt.subplots(figsize=(10, 4.2))
-    fig.patch.set_facecolor('#0c0c0c')
-    ax.set_facecolor('#0c0c0c')
-    
-    dates = z_df["date"].to_list()
-    zscores = z_df["zscore"].to_numpy()
-    
-    ax.plot(dates, zscores, color='#00D8FF', linewidth=1.5, label='Volume-Weighted Z-Score')
-    ax.axhline(0, color='#555555', linestyle='-', linewidth=0.8)
-    
-    # Entry thresholds
-    ax.axhline(entry_z, color='#FF3333', linestyle='--', linewidth=1.0, label=f'+Entry Z (+{entry_z:.1f})')
-    ax.axhline(-entry_z, color='#00FF66', linestyle='--', linewidth=1.0, label=f'-Entry Z (-{entry_z:.1f})')
-    
-    # Exit thresholds
-    ax.axhline(exit_z, color='#888888', linestyle=':', linewidth=0.8, label=f'+Exit Z (+{exit_z:.1f})')
-    ax.axhline(-exit_z, color='#888888', linestyle=':', linewidth=0.8, label=f'-Exit Z (-{exit_z:.1f})')
-    
-    # Stop thresholds
-    ax.axhline(stop_z, color='#FF0055', linestyle='-.', linewidth=1.0, label=f'+Stop Z (+{stop_z:.1f})')
-    ax.axhline(-stop_z, color='#FF0055', linestyle='-.', linewidth=1.0, label=f'-Stop Z (-{stop_z:.1f})')
-    
-    ax.fill_between(dates, zscores, entry_z, where=(zscores >= entry_z), color='#FF3333', alpha=0.25)
-    ax.fill_between(dates, zscores, -entry_z, where=(zscores <= -entry_z), color='#00FF66', alpha=0.25)
-    
-    ax.set_title("VOLUME-WEIGHTED Z-SCORE (LIQUIDITY-ADJUSTED REGIME DETECTOR)", color='#FFB000', fontfamily='monospace', fontsize=10, fontweight='bold', pad=8)
-    ax.grid(True, which='both', color='#1f1f1f', linestyle='--', linewidth=0.5)
-    ax.legend(loc='upper right', facecolor='#0c0c0c', edgecolor='#333333', labelcolor='#e0e0e0', prop={'family': 'monospace', 'size': 7}, ncol=3)
-    for spine in ax.spines.values():
-        spine.set_color('#333333')
-    ax.tick_params(colors='#888888', labelsize=8)
-    plt.xticks(rotation=10)
-    for label in (ax.get_xticklabels() + ax.get_yticklabels()):
-        label.set_fontfamily('monospace')
-        
-    plt.tight_layout()
-    buf = io.BytesIO()
-    fig.savefig(buf, format='png', facecolor=fig.get_facecolor(), edgecolor='none', dpi=150)
-    buf.seek(0)
-    plt.close(fig)
-    return buf
-
-def plot_statarb_volume_profile_chart(profile_dict: Dict[str, Any], symbol: str) -> io.BytesIO:
-    """Plots horizontal Volume Profile with POC, VAH, VAL, and HVN."""
-    fig, ax = plt.subplots(figsize=(10, 4.2))
-    fig.patch.set_facecolor('#0c0c0c')
-    ax.set_facecolor('#0c0c0c')
-    
-    profile_df = profile_dict.get("profile", pl.DataFrame())
-    poc = profile_dict.get("poc", 0.0)
-    vah = profile_dict.get("vah", 0.0)
-    val = profile_dict.get("val", 0.0)
-    hvns = profile_dict.get("hvn", [])
-    
-    if profile_df.height > 0:
-        mids = profile_df["price_bin_mid"].to_numpy()
-        vols = profile_df["volume"].to_numpy()
-        in_va = profile_df["in_value_area"].to_numpy()
-        is_poc = profile_df["is_poc"].to_numpy()
-        
-        colors = []
-        for p, va in zip(is_poc, in_va):
-            if p:
-                colors.append('#FFB000') # POC Amber
-            elif va:
-                colors.append('#00A8CC') # Value Area Cyan
-            else:
-                colors.append('#2E2E2E') # Outside Value Area Dark Gray
-                
-        bar_height = (mids[1] - mids[0]) * 0.9 if len(mids) > 1 else 1.0
-        ax.barh(mids, vols, height=bar_height, color=colors, edgecolor='#111111', alpha=0.85)
-        
-        # Horizontal lines for POC, VAH, VAL
-        ax.axhline(poc, color='#FFB000', linestyle='-', linewidth=1.5, label=f"POC: ${poc:,.2f}")
-        ax.axhline(vah, color='#00D8FF', linestyle='--', linewidth=1.2, label=f"VAH (70%): ${vah:,.2f}")
-        ax.axhline(val, color='#00D8FF', linestyle='--', linewidth=1.2, label=f"VAL (70%): ${val:,.2f}")
-        
-        for h in hvns:
-            ax.axhline(h, color='#FFFF00', linestyle=':', linewidth=0.8, alpha=0.7)
-            
-    ax.set_title(f"VOLUME PROFILE ANALYSIS: {symbol} (POC, VALUE AREA 70%, HVN)", color='#FFB000', fontfamily='monospace', fontsize=10, fontweight='bold', pad=8)
-    ax.grid(True, which='both', color='#1f1f1f', linestyle='--', linewidth=0.5)
-    ax.legend(loc='upper right', facecolor='#0c0c0c', edgecolor='#333333', labelcolor='#e0e0e0', prop={'family': 'monospace', 'size': 8})
-    for spine in ax.spines.values():
-        spine.set_color('#333333')
-    ax.tick_params(colors='#888888', labelsize=8)
-    ax.set_xlabel("Volume Traded", color='#888888', fontfamily='monospace', fontsize=8)
-    ax.set_ylabel("Price ($)", color='#888888', fontfamily='monospace', fontsize=8)
-    for label in (ax.get_xticklabels() + ax.get_yticklabels()):
-        label.set_fontfamily('monospace')
-        
-    plt.tight_layout()
-    buf = io.BytesIO()
-    fig.savefig(buf, format='png', facecolor=fig.get_facecolor(), edgecolor='none', dpi=150)
-    buf.seek(0)
-    plt.close(fig)
-    return buf
-
-def plot_statarb_cvd_chart(cvd_df: pl.DataFrame, symbol: str, ma_window: int = 20) -> io.BytesIO:
-    """Plots Cumulative Volume Delta (CVD) and its rolling moving average."""
-    fig, ax = plt.subplots(figsize=(10, 4.2))
-    fig.patch.set_facecolor('#0c0c0c')
-    ax.set_facecolor('#0c0c0c')
-    
-    dates = cvd_df["date"].to_list()
-    cvd_vals = cvd_df["cvd"].to_numpy()
-    
-    cvd_ma = pd.Series(cvd_vals).rolling(window=ma_window, min_periods=1).mean().to_numpy()
-    
-    ax.plot(dates, cvd_vals, color='#00FF66', linewidth=1.5, label=f"Cumulative Volume Delta (CVD)")
-    ax.plot(dates, cvd_ma, color='#FFB000', linestyle='--', linewidth=1.2, label=f"CVD {ma_window}-Bar MA")
-    ax.axhline(0, color='#555555', linestyle='-', linewidth=0.8)
-    
-    ax.fill_between(dates, cvd_vals, 0, where=(cvd_vals >= 0), color='#00FF66', alpha=0.08)
-    ax.fill_between(dates, cvd_vals, 0, where=(cvd_vals < 0), color='#FF3333', alpha=0.08)
-    
-    ax.set_title(f"ORDER FLOW: CUMULATIVE VOLUME DELTA (CVD) - {symbol}", color='#FFB000', fontfamily='monospace', fontsize=10, fontweight='bold', pad=8)
-    ax.grid(True, which='both', color='#1f1f1f', linestyle='--', linewidth=0.5)
-    ax.legend(loc='upper left', facecolor='#0c0c0c', edgecolor='#333333', labelcolor='#e0e0e0', prop={'family': 'monospace', 'size': 8})
-    for spine in ax.spines.values():
-        spine.set_color('#333333')
-    ax.tick_params(colors='#888888', labelsize=8)
-    plt.xticks(rotation=10)
-    for label in (ax.get_xticklabels() + ax.get_yticklabels()):
-        label.set_fontfamily('monospace')
-        
-    plt.tight_layout()
-    buf = io.BytesIO()
-    fig.savefig(buf, format='png', facecolor=fig.get_facecolor(), edgecolor='none', dpi=150)
-    buf.seek(0)
-    plt.close(fig)
-    return buf
-
-def make_bloomberg_trades_table(trades_df: Union[pl.DataFrame, pd.DataFrame]) -> str:
-    """Formats backtest round-trip trades table in Bloomberg terminal HTML table styling."""
-    if isinstance(trades_df, pl.DataFrame):
-        df_trades = trades_df.to_pandas()
-    else:
-        df_trades = trades_df.copy()
-        
-    if df_trades.empty:
-        return '<div class="bloomberg-gray-text" style="padding: 10px; font-family: \'Courier New\';">NO ROUND-TRIP TRADES EXECUTED IN CURRENT PARAMETER RANGE.</div>'
-        
-    html = '<table class="bloomberg-table">'
-    html += '<thead><tr>'
-    html += '<th style="text-align: left;">DATE</th>'
-    html += '<th style="text-align: left;">TYPE</th>'
-    html += '<th style="text-align: right;">ENTRY PX A</th>'
-    html += '<th style="text-align: right;">ENTRY PX B</th>'
-    html += '<th style="text-align: right;">EXIT PX A</th>'
-    html += '<th style="text-align: right;">EXIT PX B</th>'
-    html += '<th style="text-align: right;">ENTRY Z</th>'
-    html += '<th style="text-align: right;">EXIT Z</th>'
-    html += '<th style="text-align: right;">RETURN %</th>'
-    html += '<th style="text-align: right;">PNL ($)</th>'
-    html += '<th style="text-align: left;">REASON</th>'
-    html += '</tr></thead><tbody>'
-    
-    for _, row in df_trades.iterrows():
-        pnl_pct = row.get("pnl_pct", 0.0)
-        pnl_dollars = row.get("pnl_dollars", 0.0)
-        pnl_class = "bloomberg-green-text" if pnl_pct >= 0 else "bloomberg-red-text"
-        pnl_sign = "+" if pnl_pct >= 0 else ""
-        
-        entry_date = row.get("entry_date", "N/A")
-        if isinstance(entry_date, (datetime.datetime, pd.Timestamp)):
-            date_str = entry_date.strftime("%Y-%m-%d")
-        else:
-            date_str = str(entry_date)[:10]
-            
-        side = str(row.get("side", "N/A"))
-        side_color = "bloomberg-cyan-text" if "LONG" in side else "bloomberg-amber-text"
-        
-        entry_px_a = row.get("entry_price_a", 0.0)
-        entry_px_b = row.get("entry_price_b", 0.0)
-        exit_px_a = row.get("exit_price_a", 0.0)
-        exit_px_b = row.get("exit_price_b", 0.0)
-        entry_z = row.get("entry_z", 0.0)
-        exit_z = row.get("exit_z", 0.0)
-        reason = str(row.get("exit_reason", "N/A"))
-        
-        html += f'<tr>'
-        html += f'<td class="bloomberg-white-text" style="text-align: left;">{date_str}</td>'
-        html += f'<td class="{side_color}" style="text-align: left;"><b>{side}</b></td>'
-        html += f'<td class="bloomberg-white-text" style="text-align: right;">${entry_px_a:,.2f}</td>'
-        html += f'<td class="bloomberg-white-text" style="text-align: right;">${entry_px_b:,.2f}</td>'
-        html += f'<td class="bloomberg-white-text" style="text-align: right;">${exit_px_a:,.2f}</td>'
-        html += f'<td class="bloomberg-white-text" style="text-align: right;">${exit_px_b:,.2f}</td>'
-        html += f'<td class="bloomberg-white-text" style="text-align: right;">{entry_z:+.2f}</td>'
-        html += f'<td class="bloomberg-white-text" style="text-align: right;">{exit_z:+.2f}</td>'
-        html += f'<td class="{pnl_class}" style="text-align: right;"><b>{pnl_sign}{pnl_pct:.2f}%</b></td>'
-        html += f'<td class="{pnl_class}" style="text-align: right;"><b>{pnl_sign}${pnl_dollars:,.2f}</b></td>'
-        html += f'<td class="bloomberg-gray-text" style="text-align: left;">{reason}</td>'
-        html += f'</tr>'
-        
-    html += '</tbody></table>'
-    return clean_html(html)
-
-def render_statarb_screen():
-    """Renders the interactive Bloomberg StatArb & Volume Profile Lab Screen."""
-    st.markdown("<h3 class='bloomberg-amber-text' style='margin-top: 0;'>⚡ STAR: POLARS STATISTICAL ARBITRAGE & VOLUME PROFILE LAB</h3>", unsafe_allow_html=True)
-    
-    star_tab1, star_tab2, star_tab3 = st.tabs([
-        "📊 SINGLE PAIR LAB & BACKTEST",
-        "🔍 MULTI-PAIR SECTOR SCANNER",
-        "⚡ ALPACA TRADE DISPATCHER"
-    ])
-
-    current_pair = st.session_state.get("bbg_statarb_pair", ("AAPL", "MSFT"))
-    default_a = current_pair[0] if len(current_pair) >= 1 else "AAPL"
-    default_b = current_pair[1] if len(current_pair) >= 2 else "MSFT"
-
-    with star_tab1:
-        # Interactive Control Bar (Bloomberg Box)
-        st.markdown("<div class='bloomberg-box'>", unsafe_allow_html=True)
-        col_c1, col_c2, col_c3, col_c4 = st.columns([2.5, 2.5, 2.5, 2.5])
-        
-        with col_c1:
-            ticker_a_input = st.text_input("TICKER A (LEAD ASSET)", value=default_a, key="bbg_star_ticker_a").strip().upper()
-        with col_c2:
-            ticker_b_input = st.text_input("TICKER B (HEDGE ASSET)", value=default_b, key="bbg_star_ticker_b").strip().upper()
-        with col_c3:
-            period_choice = st.selectbox("LOOKBACK PERIOD", ["3mo", "6mo", "1y", "2y"], index=2, key="bbg_star_period")
-        with col_c4:
-            rolling_window = st.number_input("ROLLING WINDOW (W)", min_value=5, max_value=252, value=20, step=5, key="bbg_star_window")
-            
-        col_c5, col_c6, col_c7, col_c8 = st.columns([2.5, 2.5, 2.5, 2.5])
-        with col_c5:
-            entry_z = st.number_input("ENTRY Z-SCORE (±)", min_value=0.5, max_value=5.0, value=2.0, step=0.1, key="bbg_star_entry_z")
-        with col_c6:
-            exit_z = st.number_input("EXIT Z-SCORE (±)", min_value=0.0, max_value=3.0, value=0.5, step=0.1, key="bbg_star_exit_z")
-        with col_c7:
-            stop_z = st.number_input("STOP-LOSS Z-SCORE (±)", min_value=1.0, max_value=10.0, value=3.5, step=0.1, key="bbg_star_stop_z")
-        with col_c8:
-            dynamic_beta = st.checkbox("Dynamic OLS Beta", value=True, key="bbg_star_dyn_beta")
-            static_beta_val = None
-            if not dynamic_beta:
-                static_beta_val = st.number_input("Static Beta", min_value=0.01, max_value=10.0, value=1.0, step=0.05, key="bbg_star_static_beta")
-                
-        st.markdown("</div>", unsafe_allow_html=True)
-        
-        st.session_state["bbg_statarb_pair"] = (ticker_a_input, ticker_b_input)
-        
-        with st.spinner(f"Lade Kursdaten & berechne Polars StatArb für {ticker_a_input} / {ticker_b_input}..."):
-            df_a, df_b, warn_msg = fetch_statarb_pair_history(ticker_a_input, ticker_b_input, period=period_choice)
-            
-        if warn_msg:
-            st.markdown(f"<div style='font-size:0.8rem; padding: 4px 8px; margin-bottom: 10px; background-color: #1a1500; border: 1px solid #ffb000; border-radius: 3px;' class='bloomberg-amber-text'>ℹ️ {warn_msg}</div>", unsafe_allow_html=True)
-            
-        if df_a is None or df_b is None or df_a.empty or df_b.empty:
-            st.error(f"Fehler: Kursdaten für {ticker_a_input} oder {ticker_b_input} konnten nicht geladen werden.")
-        else:
-            # Process via Polars Core Engine
-            try:
-                beta_param = None if dynamic_beta else float(static_beta_val)
-                spread_df = compute_vwap_spread(df_a, df_b, rolling_window=int(rolling_window), beta=beta_param)
-                z_df = compute_volume_weighted_zscore(spread_df, rolling_window=int(rolling_window))
-                cvd_a = compute_cvd(df_a)
-                vp_a = compute_volume_profile(df_a, num_bins=40)
-                backtest_results = run_statarb_backtest(
-                    df_a, df_b,
-                    entry_z=float(entry_z),
-                    exit_z=float(exit_z),
-                    stop_z=float(stop_z),
-                    rolling_window=int(rolling_window),
-                    beta=beta_param
-                )
-            except Exception as e:
-                st.error(f"Engine computation error: {e}")
-                backtest_results = {}
-                spread_df = None
-
-            if spread_df is not None:
-                # Top Metric Cards
-                tot_ret = backtest_results.get("total_return_pct", 0.0)
-                sharpe = backtest_results.get("sharpe_ratio", 0.0)
-                sortino = backtest_results.get("sortino_ratio", 0.0)
-                max_dd = backtest_results.get("max_drawdown_pct", 0.0)
-                win_rate = backtest_results.get("win_rate", 0.0)
-                prof_fac = backtest_results.get("profit_factor", 0.0)
-                tot_trades = backtest_results.get("total_trades", 0)
-                
-                ret_color = "bloomberg-green-text" if tot_ret >= 0 else "bloomberg-red-text"
-                ret_sign = "+" if tot_ret >= 0 else ""
-                
-                col_m1, col_m2, col_m3, col_m4, col_m5, col_m6, col_m7 = st.columns(7)
-                with col_m1:
-                    st.markdown(clean_html(f"""
-                    <div class="bloomberg-stat-box">
-                        <span class="bloomberg-gray-text" style="font-size:0.7rem; font-weight:bold;">TOTAL RETURN</span><br>
-                        <span class="{ret_color}" style="font-size:1.25rem; font-weight:bold;">{ret_sign}{tot_ret:.2f}%</span>
-                    </div>
-                    """), unsafe_allow_html=True)
-                with col_m2:
-                    st.markdown(clean_html(f"""
-                    <div class="bloomberg-stat-box">
-                        <span class="bloomberg-gray-text" style="font-size:0.7rem; font-weight:bold;">SHARPE RATIO</span><br>
-                        <span class="bloomberg-cyan-text" style="font-size:1.25rem; font-weight:bold;">{sharpe:.2f}</span>
-                    </div>
-                    """), unsafe_allow_html=True)
-                with col_m3:
-                    st.markdown(clean_html(f"""
-                    <div class="bloomberg-stat-box">
-                        <span class="bloomberg-gray-text" style="font-size:0.7rem; font-weight:bold;">SORTINO RATIO</span><br>
-                        <span class="bloomberg-cyan-text" style="font-size:1.25rem; font-weight:bold;">{sortino:.2f}</span>
-                    </div>
-                    """), unsafe_allow_html=True)
-                with col_m4:
-                    st.markdown(clean_html(f"""
-                    <div class="bloomberg-stat-box">
-                        <span class="bloomberg-gray-text" style="font-size:0.7rem; font-weight:bold;">MAX DRAWDOWN</span><br>
-                        <span class="bloomberg-red-text" style="font-size:1.25rem; font-weight:bold;">{max_dd:.2f}%</span>
-                    </div>
-                    """), unsafe_allow_html=True)
-                with col_m5:
-                    st.markdown(clean_html(f"""
-                    <div class="bloomberg-stat-box">
-                        <span class="bloomberg-gray-text" style="font-size:0.7rem; font-weight:bold;">WIN RATE</span><br>
-                        <span class="bloomberg-amber-text" style="font-size:1.25rem; font-weight:bold;">{win_rate:.1f}%</span>
-                    </div>
-                    """), unsafe_allow_html=True)
-                with col_m6:
-                    st.markdown(clean_html(f"""
-                    <div class="bloomberg-stat-box">
-                        <span class="bloomberg-gray-text" style="font-size:0.7rem; font-weight:bold;">PROFIT FACTOR</span><br>
-                        <span class="bloomberg-green-text" style="font-size:1.25rem; font-weight:bold;">{prof_fac:.2f}</span>
-                    </div>
-                    """), unsafe_allow_html=True)
-                with col_m7:
-                    st.markdown(clean_html(f"""
-                    <div class="bloomberg-stat-box">
-                        <span class="bloomberg-gray-text" style="font-size:0.7rem; font-weight:bold;">TOTAL TRADES</span><br>
-                        <span class="bloomberg-white-text" style="font-size:1.25rem; font-weight:bold;">{tot_trades}</span>
-                    </div>
-                    """), unsafe_allow_html=True)
-                    
-                st.markdown("<br>", unsafe_allow_html=True)
-                
-                # 2. Visualizations Grid
-                col_g1, col_g2 = st.columns(2)
-                with col_g1:
-                    st.markdown(f"<h4 class='bloomberg-cyan-text'>[GP1] VWAP SPREAD & DYNAMIC HEDGE RATIO ({ticker_a_input}/{ticker_b_input})</h4>", unsafe_allow_html=True)
-                    buf_spread = plot_statarb_spread_chart(spread_df, ticker_a_input, ticker_b_input)
-                    st.image(buf_spread, use_container_width=True)
-                    
-                with col_g2:
-                    st.markdown(f"<h4 class='bloomberg-cyan-text'>[GP2] VOLUME-WEIGHTED Z-SCORE & TRADING BANDS</h4>", unsafe_allow_html=True)
-                    buf_zscore = plot_statarb_zscore_chart(z_df, entry_z=float(entry_z), exit_z=float(exit_z), stop_z=float(stop_z))
-                    st.image(buf_zscore, use_container_width=True)
-                    
-                col_g3, col_g4 = st.columns(2)
-                with col_g3:
-                    st.markdown(f"<h4 class='bloomberg-cyan-text'>[GP3] VOLUME PROFILE: {ticker_a_input} (POC, VALUE AREA 70%)</h4>", unsafe_allow_html=True)
-                    buf_vp = plot_statarb_volume_profile_chart(vp_a, ticker_a_input)
-                    st.image(buf_vp, use_container_width=True)
-                    
-                with col_g4:
-                    st.markdown(f"<h4 class='bloomberg-cyan-text'>[GP4] ORDER FLOW CUMULATIVE VOLUME DELTA (CVD): {ticker_a_input}</h4>", unsafe_allow_html=True)
-                    buf_cvd = plot_statarb_cvd_chart(cvd_a, ticker_a_input, ma_window=int(rolling_window))
-                    st.image(buf_cvd, use_container_width=True)
-                    
-                st.markdown("<br>", unsafe_allow_html=True)
-                
-                # 3. Trade Logs Table
-                st.markdown("<h4 class='bloomberg-cyan-text'>[BLOTTER] STATARB ROUND-TRIP TRADE EXECUTION LOGS</h4>", unsafe_allow_html=True)
-                trades_df = backtest_results.get("trades", pl.DataFrame())
-                trades_table_html = make_bloomberg_trades_table(trades_df)
-                st.markdown(trades_table_html, unsafe_allow_html=True)
-
-    with star_tab2:
-        st.markdown("<h4 class='bloomberg-amber-text'>🔍 MULTI-PAIR STATISTICAL ARBITRAGE SECTOR SCANNER</h4>", unsafe_allow_html=True)
-        st.markdown("<p class='bloomberg-gray-text'>Real-time scanner evaluating candidate pairs across AI Compute, Semiconductors, Tech, Energy, and Financial sectors.</p>", unsafe_allow_html=True)
-        
-        c_sc1, c_sc2, c_sc3 = st.columns([3, 3, 4])
-        with c_sc1:
-            scan_window = st.number_input("Scan Window (W)", min_value=5, max_value=252, value=20, key="bbg_star_scan_window")
-        with c_sc2:
-            scan_entry_z = st.number_input("Trigger Z-Threshold (±)", min_value=0.5, max_value=5.0, value=2.0, key="bbg_star_scan_z")
-        with c_sc3:
-            run_scan_btn = st.button("🚀 SCAN ALL SECTOR PAIRS NOW", key="bbg_star_run_scan", use_container_width=True)
-            
-        if run_scan_btn or "bbg_star_scan_df" not in st.session_state:
-            with st.spinner("Scanne Sektor-Paare nach Signalchancen..."):
-                scan_res = scan_pair_universe(rolling_window=int(scan_window), entry_z=float(scan_entry_z))
-                st.session_state["bbg_star_scan_df"] = scan_res
-        else:
-            scan_res = st.session_state.get("bbg_star_scan_df", pl.DataFrame())
-            
-        if scan_res is not None and scan_res.height > 0:
-            pdf_scan = scan_res.to_pandas()
-            
-            # Format dataframe for display
-            display_rows = []
-            for _, row in pdf_scan.iterrows():
-                sig = row["signal_type"]
-                if sig == "LONG_SPREAD":
-                    badge = "<span style='background-color:#003300; color:#00ff00; padding:2px 6px; border-radius:3px; font-weight:bold;'>BUY A / SELL B</span>"
-                elif sig == "SHORT_SPREAD":
-                    badge = "<span style='background-color:#440000; color:#ff3333; padding:2px 6px; border-radius:3px; font-weight:bold;'>SELL A / BUY B</span>"
-                else:
-                    badge = "<span style='background-color:#222222; color:#888888; padding:2px 6px; border-radius:3px;'>NEUTRAL</span>"
-                    
-                display_rows.append({
-                    "SECTOR": row["sector"],
-                    "PAIR": f"<b>{row['ticker_a']} / {row['ticker_b']}</b>",
-                    "PRICE A": f"${row['price_a']:.2f}",
-                    "PRICE B": f"${row['price_b']:.2f}",
-                    "Z-SCORE": f"{row['current_zscore']:+.3f}",
-                    "BETA": f"{row['hedge_ratio_beta']:.3f}",
-                    "SIGNAL": badge,
-                    "SHARPE": f"{row['sharpe_ratio']:.2f}",
-                    "RETURN %": f"{row['total_return_pct']:+.2f}%",
-                    "WIN RATE": f"{row['win_rate']:.1f}%"
-                })
-                
-            disp_df = pd.DataFrame(display_rows)
-            st.markdown(disp_df.to_html(escape=False, index=False, classes=["bloomberg-table"]), unsafe_allow_html=True)
-            
-            st.markdown("<br>", unsafe_allow_html=True)
-            st.markdown("##### ⚡ Quick Action: Load Scanned Pair into Lab")
-            col_sel1, col_sel2 = st.columns([6, 4])
-            with col_sel1:
-                pair_options = [f"{r['ticker_a']}/{r['ticker_b']} ({r['sector']})" for r in pdf_scan.to_dict(orient="records")]
-                selected_pair_str = st.selectbox("Select Pair to Inspect", options=pair_options, key="bbg_star_pair_select")
-            with col_sel2:
-                if st.button("📥 Load Pair into StatArb Lab", key="bbg_star_load_btn", use_container_width=True):
-                    if selected_pair_str:
-                        pair_code = selected_pair_str.split(" ")[0]
-                        pa, pb = pair_code.split("/")
-                        st.session_state["bbg_statarb_pair"] = (pa, pb)
-                        st.success(f"Pair {pa} / {pb} geladen!")
-                        st.rerun()
-
-    with star_tab3:
-        st.markdown("<h4 class='bloomberg-amber-text'>⚡ ALPACA BROKERAGE ORDER DISPATCHER</h4>", unsafe_allow_html=True)
-        
-        alpaca_ok = is_alpaca_configured()
-        if alpaca_ok:
-            st.markdown("<div style='background-color:#002200; border:1px solid #00ff00; padding:8px; border-radius:4px; margin-bottom:15px;' class='bloomberg-green-text'>✅ ALPACA API CONNECTED & READY FOR ORDERS</div>", unsafe_allow_html=True)
-        else:
-            st.markdown("<div style='background-color:#221100; border:1px solid #ffb000; padding:8px; border-radius:4px; margin-bottom:15px;' class='bloomberg-amber-text'>⚠️ ALPACA API NOT CONFIGURED: Add ALPACA_API_KEY & ALPACA_SECRET_KEY to .env or environment to enable live paper/live execution. Simulation mode enabled.</div>", unsafe_allow_html=True)
-            
-        st.markdown("<div class='bloomberg-box'>", unsafe_allow_html=True)
-        col_o1, col_o2, col_o3 = st.columns(3)
-        with col_o1:
-            order_ticker_a = st.text_input("LEG A TICKER", value=default_a, key="bbg_star_ord_t_a").strip().upper()
-            order_price_a = st.number_input("Price A ($)", min_value=0.01, value=100.0, step=1.0, key="bbg_star_ord_p_a")
-        with col_o2:
-            order_ticker_b = st.text_input("LEG B TICKER", value=default_b, key="bbg_star_ord_t_b").strip().upper()
-            order_price_b = st.number_input("Price B ($)", min_value=0.01, value=80.0, step=1.0, key="bbg_star_ord_p_b")
-        with col_o3:
-            order_side = st.selectbox("SPREAD ACTION", ["LONG_SPREAD (Buy A / Sell B)", "SHORT_SPREAD (Sell A / Buy B)"], key="bbg_star_ord_side")
-            order_type = st.selectbox("ORDER TYPE", ["market", "limit"], key="bbg_star_ord_type")
-            
-        col_o4, col_o5 = st.columns(2)
-        with col_o4:
-            total_capital = st.number_input("TOTAL PAIR ALLOCATION ($USD)", min_value=100.0, max_value=1000000.0, value=10000.0, step=1000.0, key="bbg_star_ord_capital")
-        with col_o5:
-            hedge_ratio = st.number_input("HEDGE RATIO (BETA)", min_value=0.1, max_value=10.0, value=1.0, step=0.05, key="bbg_star_ord_beta")
-            
-        # Preview share leg allocations
-        cap_per_leg = total_capital * 0.5
-        est_qty_a = max(1.0, round(cap_per_leg / max(order_price_a, 1e-4)))
-        est_qty_b = max(1.0, round((cap_per_leg * hedge_ratio) / max(order_price_b, 1e-4)))
-        
-        side_a_str = "BUY" if "LONG" in order_side else "SELL"
-        side_b_str = "SELL" if "LONG" in order_side else "BUY"
-        
-        st.markdown(f"""
-        <div style='background-color:#0c0c0c; border:1px solid #333333; padding:10px; border-radius:4px; margin-top:10px;'>
-            <span class='bloomberg-gray-text'>ORDER ESTIMATE PREVIEW:</span><br>
-            <span class='bloomberg-cyan-text'><b>LEG A ({order_ticker_a}):</b> {side_a_str} {est_qty_a:,} shares @ approx ${order_price_a:.2f} (~${est_qty_a * order_price_a:,.2f})</span><br>
-            <span class='bloomberg-cyan-text'><b>LEG B ({order_ticker_b}):</b> {side_b_str} {est_qty_b:,} shares @ approx ${order_price_b:.2f} (~${est_qty_b * order_price_b:,.2f})</span>
-        </div>
-        """, unsafe_allow_html=True)
-        st.markdown("</div>", unsafe_allow_html=True)
-        
-        if st.button("🚀 SUBMIT PAIR TRADE TO ALPACA BROKERAGE", key="bbg_star_submit_order_btn", use_container_width=True):
-            with st.spinner("Sende Pair-Order an Alpaca REST API..."):
-                ord_res = place_statarb_pair_order(
-                    ticker_a=order_ticker_a,
-                    ticker_b=order_ticker_b,
-                    side="LONG_SPREAD" if "LONG" in order_side else "SHORT_SPREAD",
-                    total_capital_usd=float(total_capital),
-                    price_a=float(order_price_a),
-                    price_b=float(order_price_b),
-                    hedge_ratio_beta=float(hedge_ratio),
-                    order_type=order_type
-                )
-                
-            if ord_res.get("status") == "success":
-                st.success(f"✅ Pair Order Erfogreich übermittelt!\nLeg A ({order_ticker_a}): {ord_res['side_a'].upper()} {ord_res['qty_a']} Shares\nLeg B ({order_ticker_b}): {ord_res['side_b'].upper()} {ord_res['qty_b']} Shares")
-            else:
-                st.warning(f"Order Dispatch Info: {ord_res.get('message', 'Unbekannter Status')}")
-                
-            with st.expander("🔍 Detailed Order Dispatch JSON Payload", expanded=True):
-                st.json(ord_res)
-
-
 def render_bloomberg_tab():
     """Main rendering entrypoint that manages state, routes commands, and draws the terminal layout."""
     # Inject scoped style sheet for Bloomberg theme styling
@@ -1227,8 +622,6 @@ def render_bloomberg_tab():
         st.session_state["bbg_screen"] = "PORT"
     if "bbg_ticker" not in st.session_state:
         st.session_state["bbg_ticker"] = "AAPL"
-    if "bbg_statarb_pair" not in st.session_state:
-        st.session_state["bbg_statarb_pair"] = ("AAPL", "MSFT")
         
     clocks, active_markets = get_market_clocks()
     
@@ -1277,42 +670,33 @@ def render_bloomberg_tab():
     with col_cmd:
         cmd_input = st.text_input(
             "CMD>", 
-            placeholder="Type Ticker or PORT, STAR, WEIS, MAPS, NEWS...", 
+            placeholder="Type Ticker or PORT, WEIS, MAPS, NEWS...", 
             key="bbg_cmd_field",
             label_visibility="collapsed"
         )
         
         if cmd_input:
-            cmd_parts = cmd_input.strip().upper().split()
-            first_cmd = cmd_parts[0] if cmd_parts else ""
-            if first_cmd in ["STAR", "STAT", "STATARB", "ARB"]:
-                st.session_state["bbg_screen"] = "STAR"
-                if len(cmd_parts) >= 3:
-                    st.session_state["bbg_statarb_pair"] = (cmd_parts[1], cmd_parts[2])
-                elif len(cmd_parts) == 2 and any(sep in cmd_parts[1] for sep in ["/", "-", ","]):
-                    subparts = re.split(r'[/,-]', cmd_parts[1])
-                    if len(subparts) >= 2 and subparts[0] and subparts[1]:
-                        st.session_state["bbg_statarb_pair"] = (subparts[0], subparts[1])
-            elif first_cmd in ["PORT", "DEPOT", "PORTFOLIO"]:
+            cmd = cmd_input.strip().upper()
+            if cmd in ["PORT", "DEPOT", "PORTFOLIO"]:
                 st.session_state["bbg_screen"] = "PORT"
-            elif first_cmd in ["WEIS", "WORLD", "MARKETS"]:
+            elif cmd in ["WEIS", "WORLD", "MARKETS"]:
                 st.session_state["bbg_screen"] = "WEIS"
-            elif first_cmd in ["NEWS", "HEADLINES"]:
+            elif cmd in ["NEWS", "HEADLINES"]:
                 st.session_state["bbg_screen"] = "NEWS"
-            elif first_cmd in ["MACR", "MACRO"]:
+            elif cmd in ["MACR", "MACRO"]:
                 st.session_state["bbg_screen"] = "MACR"
-            elif first_cmd in ["MAPS", "HEAT", "HEATMAP"]:
+            elif cmd in ["MAPS", "HEAT", "HEATMAP"]:
                 st.session_state["bbg_screen"] = "MAPS"
-            elif first_cmd in ["ALGO", "OMS", "RUNNING", "EXEC", "LOGS"]:
+            elif cmd in ["ALGO", "OMS", "RUNNING", "EXEC", "LOGS"]:
                 st.session_state["bbg_screen"] = "ALGO"
-            elif first_cmd in ["HELP", "?", "MENU"]:
+            elif cmd in ["HELP", "?", "MENU"]:
                 st.session_state["bbg_screen"] = "HELP"
             else:
                 st.session_state["bbg_screen"] = "TICKER"
-                st.session_state["bbg_ticker"] = first_cmd
+                st.session_state["bbg_ticker"] = cmd
                 
     with col_btn:
-        col_b1, col_b2, col_b3, col_b4, col_b5, col_b6, col_b7, col_b8 = st.columns(8)
+        col_b1, col_b2, col_b3, col_b4, col_b5, col_b6, col_b7 = st.columns(7)
         with col_b1:
             if st.button("💼 PORT (Depot)", key="bbg_btn_port", use_container_width=True):
                 st.session_state["bbg_screen"] = "PORT"
@@ -1332,9 +716,6 @@ def render_bloomberg_tab():
             if st.button("🤖 ALGO (OMS)", key="bbg_btn_algo", use_container_width=True):
                 st.session_state["bbg_screen"] = "ALGO"
         with col_b7:
-            if st.button("⚡ STAR (StatArb)", key="bbg_btn_star", use_container_width=True):
-                st.session_state["bbg_screen"] = "STAR"
-        with col_b8:
             if st.button("❓ HELP", key="bbg_btn_help", use_container_width=True):
                 st.session_state["bbg_screen"] = "HELP"
                 
@@ -1585,10 +966,6 @@ def render_bloomberg_tab():
                         <td>Loads the Order Management System displaying live algorithm slices (TWAP/VWAP) and active Pairs trades.</td>
                     </tr>
                     <tr>
-                        <td class="bloomberg-amber-text"><b>STAR</b> or <b>STAT</b></td>
-                        <td>Loads the Polars Statistical Arbitrage & Volume Profile Lab. Direct pair query: <b>STAR AAPL MSFT</b> or <b>STAT KO PEP</b>.</td>
-                    </tr>
-                    <tr>
                         <td class="bloomberg-amber-text"><b>[TICKER]</b></td>
                         <td>Type any stock symbol (e.g. <b>AAPL</b>, <b>NVDA</b>, <b>TSLA</b>) to open the profile details page.</td>
                     </tr>
@@ -1607,9 +984,6 @@ def render_bloomberg_tab():
         </div>
         """
         st.markdown(clean_html(help_html), unsafe_allow_html=True)
-
-    elif screen == "STAR":
-        render_statarb_screen()
 
     elif screen == "ALGO":
         st.markdown("<h3 class='bloomberg-amber-text' style='margin-top: 0;'>🤖 ALGO-MONITOR: ACTIVE QUANTITATIVE LOGS & OMS</h3>", unsafe_allow_html=True)

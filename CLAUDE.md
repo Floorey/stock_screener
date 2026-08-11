@@ -44,7 +44,7 @@ Local state/cache files are gitignored and regenerate on run: `screener_cache.js
 **`app.py`** is the Streamlit entrypoint and is intentionally monolithic (~2600 lines): it owns the sidebar (index selection, scan trigger, Alpaca connection widget, macro banner) and lays out `st.tabs(...)` where each tab either renders inline or delegates to a `render_*_tab()` function imported from a dedicated `*_ui.py` module. When adding a new dashboard section, follow this pattern: put the render logic in its own `<name>_ui.py` module exposing `render_<name>_tab()`, then wire it into the `st.tabs([...])` list and `with tab_x:` block in `app.py` — don't grow `app.py`'s inline sections further.
 
 Tab → module map (see the `st.tabs([...])` call in `app.py`):
-- Bloomberg Terminal → `bloomberg_ui.py`
+- Bloomberg Terminal → `bloomberg_ui.py` (command-driven screens: PORT/WEIS/MACR/MAPS/NEWS/ALGO/ROUT/HELP/ticker; the `ROUT` screen delegates to `algo_router_ui.py`)
 - Screener Dashboard → inline in `app.py`, backed by `screener.py`
 - Watchlist Manager → `watchlist_manager.py` (JSON-file backed)
 - Options-Screener → `options_ui.py` (logic in `options_advisor.py`)
@@ -65,6 +65,8 @@ Tab → module map (see the `st.tabs([...])` call in `app.py`):
 **MCP servers** (two, independent, both `FastMCP`-based, both load `alpaca_trader.py`/local modules):
 - `mcp_server.py` — general-purpose tools for agents: watchlist, screener scores, Alpaca account/positions, trade execution.
 - `falcone_server.py` — a volume-spike/VPEI scanner over a hardcoded Nasdaq/Russell ticker universe plus synthetic-swap signal execution (`synthetic_swap_builder.py`); also runnable standalone as a polling loop via `--scanner --interval N` (writes to `falcone_engine.log`) instead of serving MCP.
+
+**Algo routing / gating** (`algo_router.py`, rendered by `algo_router_ui.py` as the Bloomberg `ROUT` screen): the analytical check that decides *which* algorithm may run. `route()` builds a regime snapshot (session phase, VIX, realized vol, Kaufman efficiency ratio, breadth, rates) plus portfolio context, then scores each candidate (Falcone VPEI, stat-arb pairs, premarket volume-rate, TWAP/VWAP execution, market hedge) against hard gates → GO/CONDITIONAL/BLOCKED. `preflight_signals()` validates concrete Falcone signals (bar freshness, liquidity, RR, position-size cap incl. the contract-rounding interaction, cooldown, existing exposure) before execution. The router never places orders — extend the gate/score functions here rather than adding trigger conditions inside the individual algo modules. `falcone_server.scan_signals()` is the structured feed it consumes; `scan_markets()` is the text-formatting MCP wrapper around it.
 
 **Report generation**: `report_generator.py` (per-ticker PDF) and `generate_macro_reports.py` (macro/synthetic-trade PDFs) both use `reportlab`; `risk_manager.py` generates its own stress-test PDF report. Output lands in `reports/`.
 
