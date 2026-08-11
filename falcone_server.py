@@ -55,7 +55,21 @@ def check_ticker_vpei(ticker: str, multiplier: float) -> Optional[dict]:
         df = t.history(period="5d", interval="5m")
         if df.empty or len(df) < 20:
             return None
-        
+
+        # Die zuletzt gelieferte Kerze ist waehrend der Session noch offen. Ihr
+        # Volumen ist unvollstaendig, und da VPEI ~ 1/Volumen skaliert, wuerde
+        # jede laufende Kerze das Signal systematisch aufblaehen. Deshalb immer
+        # auf der letzten *geschlossenen* Kerze arbeiten.
+        bar_interval = pd.Timedelta(minutes=5)
+        now_tz = pd.Timestamp.now(tz=df.index.tz) if df.index.tz is not None else pd.Timestamp.now()
+        if now_tz - df.index[-1] < bar_interval:
+            df = df.iloc[:-1]
+        if len(df) < 20:
+            return None
+
+        bar_timestamp = df.index[-1]
+        bar_age_min = float((now_tz - bar_timestamp).total_seconds() / 60.0)
+
         # Group by time of day to establish the U-Curve volume profile
         df['time'] = df.index.time
         mean_volumes = df.groupby('time')['Volume'].mean()
@@ -122,22 +136,26 @@ def check_ticker_vpei(ticker: str, multiplier: float) -> Optional[dict]:
                 "threshold": float(threshold),
                 "sl": float(sl),
                 "tp": float(tp),
-                "trigger_type": "Volume Spike" if is_volume_spike else "VPEI Mid-Day Drift"
+                "trigger_type": "Volume Spike" if is_volume_spike else "VPEI Mid-Day Drift",
+                # Kontext fuer den Preflight-Check in algo_router.py
+                "bar_time": bar_timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+                "bar_age_min": bar_age_min,
+                "dollar_volume": float(latest_close * latest_vol)
             }
     except Exception:
         pass
     return None
 
-@mcp.tool(name="scan_markets", description="Scannt parallel das gesamte definierte Universum (Top 30 Nasdaq Large Caps & Top 30 Russell Small/Mid Caps) auf Volumen-Spikes und VPEI-Drifts.")
-def scan_markets(multiplier: float = 3.0) -> str:
+def scan_signals(multiplier: float = 3.0) -> list[dict]:
     """
-    Scannt parallel das gesamte definierte Universum (Top 30 Nasdaq Large Caps & Top 30 Russell Small/Mid Caps) auf Volumen-Spikes und VPEI-Drifts.
-    
-    :param multiplier: Volumen-Schwellenwert-Faktor (Standard: 3.0)
+    Scannt das Universum und liefert die Rohsignale als Liste von Dicts.
+
+    Strukturierte Variante von scan_markets() — Grundlage fuer den Preflight-Check
+    in algo_router.py und fuer die Bloomberg-Terminal-Anzeige. Sortiert nach VPEI.
     """
     tickers = NASDAQ_TICKERS + RUSSELL_TICKERS
     signals = []
-    
+
     # Run parallel scanning with ThreadPoolExecutor
     with ThreadPoolExecutor(max_workers=10) as executor:
         futures = {executor.submit(check_ticker_vpei, ticker, multiplier): ticker for ticker in tickers}
@@ -145,20 +163,32 @@ def scan_markets(multiplier: float = 3.0) -> str:
             try:
                 res = future.result()
                 if res:
+                    res["category"] = "NASDAQ" if res["ticker"] in NASDAQ_TICKERS else "RUSSELL"
                     signals.append(res)
             except Exception as e:
                 log_event(f"[ERROR] Scan failed for {futures[future]}: {e}")
-                
+
+    signals.sort(key=lambda x: x["vpei"], reverse=True)
+    return signals
+
+
+@mcp.tool(name="scan_markets", description="Scannt parallel das gesamte definierte Universum (Top 30 Nasdaq Large Caps & Top 30 Russell Small/Mid Caps) auf Volumen-Spikes und VPEI-Drifts.")
+def scan_markets(multiplier: float = 3.0) -> str:
+    """
+    Scannt parallel das gesamte definierte Universum (Top 30 Nasdaq Large Caps & Top 30 Russell Small/Mid Caps) auf Volumen-Spikes und VPEI-Drifts.
+
+    :param multiplier: Volumen-Schwellenwert-Faktor (Standard: 3.0)
+    """
+    signals = scan_signals(multiplier)
+
     if not signals:
         msg = f"=== Market Scan Completed ===\nVol-Faktor: {multiplier}x\nEs wurden keine Volumen-Spikes oder VPEI-Signale im Universum gefunden."
         log_event(f"[INFO] scan_markets: Completed. No signals found.")
         return msg
-        
-    signals.sort(key=lambda x: x["vpei"], reverse=True)
-    
+
     lines = [f"=== Falcone VPEI Signals Detected ({len(signals)} tickers) ==="]
     for s in signals:
-        category = "NASDAQ" if s["ticker"] in NASDAQ_TICKERS else "RUSSELL"
+        category = s.get("category", "NASDAQ" if s["ticker"] in NASDAQ_TICKERS else "RUSSELL")
         lines.append(
             f"• {s['ticker']} ({category}) | Kurs: ${s['close']:.2f} | "
             f"Typ: {s['trigger_type']} | VPEI: {s['vpei']:.4f} (Limit: {s['threshold']:.4f}) | "
@@ -239,10 +269,26 @@ def execute_signal(ticker: str, category: str, signal_price: float, stop_loss: f
     side = "BUY" if direction == "long" else "SELL"
     
     # Standard options contract = 100 shares. Round final_qty to options contract count.
+    # Kaufmaennisches Runden kann die 15%-Kappe ueberschreiten, deshalb wird das
+    # Ergebnis anschliessend auf die Kappe zurueckgeschnitten.
     option_qty = int(np.round(final_qty / 100.0))
-    if option_qty < 1:
-        option_qty = 1
-        
+
+    max_contracts_by_cap = int(np.floor(max_position_value / (100.0 * signal_price))) if signal_price > 0 else 0
+    if max_contracts_by_cap < 1:
+        # Ein einzelner Kontrakt (= 100 Aktien Delta) liegt bereits ueber der
+        # Positionskappe. Die Position ist im Risikorahmen nicht darstellbar ->
+        # ablehnen statt still ueberdimensionieren.
+        msg = (
+            f"Abgelehnt: {ticker} — 1 Kontrakt entspricht {100 * signal_price:,.0f} USD Exposure "
+            f"({(100 * signal_price / equity) * 100:.1f}% des Depots) und ueberschreitet die "
+            f"15%-Positionskappe von {max_position_value:,.0f} USD. "
+            f"Basiswert zu teuer fuer die aktuelle Kontogroesse (Equity: {equity:,.0f} USD)."
+        )
+        log_event(f"[WARN] execute_signal: {msg}")
+        return msg
+
+    option_qty = max(1, min(option_qty, max_contracts_by_cap))
+
     order_id = "SIMULATED_ORDER"
     order_status = "filled"
     alpaca_success = False

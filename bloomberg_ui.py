@@ -689,6 +689,8 @@ def render_bloomberg_tab():
                 st.session_state["bbg_screen"] = "MAPS"
             elif cmd in ["ALGO", "OMS", "RUNNING", "EXEC", "LOGS"]:
                 st.session_state["bbg_screen"] = "ALGO"
+            elif cmd in ["ROUT", "ROUTE", "ROUTER", "CHECK", "STRAT"]:
+                st.session_state["bbg_screen"] = "ROUT"
             elif cmd in ["HELP", "?", "MENU"]:
                 st.session_state["bbg_screen"] = "HELP"
             else:
@@ -696,7 +698,7 @@ def render_bloomberg_tab():
                 st.session_state["bbg_ticker"] = cmd
                 
     with col_btn:
-        col_b1, col_b2, col_b3, col_b4, col_b5, col_b6, col_b7 = st.columns(7)
+        col_b1, col_b2, col_b3, col_b4, col_b5, col_b6, col_b7, col_b8 = st.columns(8)
         with col_b1:
             if st.button("💼 PORT (Depot)", key="bbg_btn_port", use_container_width=True):
                 st.session_state["bbg_screen"] = "PORT"
@@ -716,6 +718,9 @@ def render_bloomberg_tab():
             if st.button("🤖 ALGO (OMS)", key="bbg_btn_algo", use_container_width=True):
                 st.session_state["bbg_screen"] = "ALGO"
         with col_b7:
+            if st.button("🧭 ROUT (Check)", key="bbg_btn_rout", use_container_width=True):
+                st.session_state["bbg_screen"] = "ROUT"
+        with col_b8:
             if st.button("❓ HELP", key="bbg_btn_help", use_container_width=True):
                 st.session_state["bbg_screen"] = "HELP"
                 
@@ -966,6 +971,10 @@ def render_bloomberg_tab():
                         <td>Loads the Order Management System displaying live algorithm slices (TWAP/VWAP) and active Pairs trades.</td>
                     </tr>
                     <tr>
+                        <td class="bloomberg-amber-text"><b>ROUT</b> or <b>CHECK</b></td>
+                        <td>Analytischer Check: Marktregime, Trigger-Matrix (welcher Algorithmus freigegeben bzw. gesperrt ist) und Preflight-Pruefung der Falcone-Signale.</td>
+                    </tr>
+                    <tr>
                         <td class="bloomberg-amber-text"><b>[TICKER]</b></td>
                         <td>Type any stock symbol (e.g. <b>AAPL</b>, <b>NVDA</b>, <b>TSLA</b>) to open the profile details page.</td>
                     </tr>
@@ -984,6 +993,13 @@ def render_bloomberg_tab():
         </div>
         """
         st.markdown(clean_html(help_html), unsafe_allow_html=True)
+
+    elif screen == "ROUT":
+        try:
+            from algo_router_ui import render_router_screen
+            render_router_screen()
+        except Exception as e:
+            st.error(f"ROUT-Screen konnte nicht geladen werden: {e}")
 
     elif screen == "ALGO":
         st.markdown("<h3 class='bloomberg-amber-text' style='margin-top: 0;'>🤖 ALGO-MONITOR: ACTIVE QUANTITATIVE LOGS & OMS</h3>", unsafe_allow_html=True)
@@ -1157,13 +1173,18 @@ def render_bloomberg_tab():
                 with st.spinner("Falcone Engine scannt Märkte..."):
                     try:
                         from falcone_server import scan_markets
-                        scan_result = scan_markets()
+                        st.session_state["bbg_falcone_scan"] = scan_markets()
                         st.toast("Scan erfolgreich abgeschlossen!")
                     except Exception as e:
                         st.error(f"Scan-Fehler: {e}")
-        
+
         with col_info:
-            st.info("💡 Starten Sie den Scanner extern für kontinuierliche Überwachung: `python falcone_server.py --scanner`", icon="🤖")
+            st.info("💡 Vor der Ausführung: Screen `ROUT` prüft Regime-Freigabe und Signal-Preflight. "
+                    "Dauerbetrieb extern: `python falcone_server.py --scanner`", icon="🤖")
+
+        # Scan-Ergebnis anzeigen statt verwerfen
+        if st.session_state.get("bbg_falcone_scan"):
+            st.code(st.session_state["bbg_falcone_scan"], language="text")
 
         log_file_path = os.path.join(os.path.dirname(__file__), "falcone_engine.log")
         if not os.path.exists(log_file_path):
