@@ -25,6 +25,9 @@ python falcone_server.py --scanner --interval 5  # standalone background scan lo
 # Run the simpler MCP server (watchlist/screener/account tools for agents)
 python mcp_server.py
 
+# Run the mobile REST API (watchlist/screener/account/orders over HTTP, API-key gated)
+uvicorn mobile_api:app --host 0.0.0.0 --port 8000
+
 # One-off index shortlist scripts
 python short_sp500.py
 python short_nasdaq.py
@@ -35,7 +38,7 @@ There is no lint/test tooling configured (no pytest, no linter config) — verif
 
 ## Environment
 
-Credentials live in `.env` (gitignored): `ALPACA_API_KEY`, `ALPACA_SECRET_KEY`, `ALPACA_BASE_URL` (defaults to paper trading). If unset, the app assumes everything is tradable/shortable and Alpaca-dependent features degrade gracefully rather than failing. `mcp_config.json` wires an `alpaca-mcp-server` MCP server with its own copy of these keys — treat this file as sensitive, it is not gitignored.
+Credentials live in `.env` (gitignored): `ALPACA_API_KEY`, `ALPACA_SECRET_KEY`, `ALPACA_BASE_URL` (defaults to paper trading). If unset, the app assumes everything is tradable/shortable and Alpaca-dependent features degrade gracefully rather than failing. `mcp_config.json` wires an `alpaca-mcp-server` MCP server with its own copy of these keys — treat this file as sensitive, it is not gitignored. `MOBILE_API_KEY` (also in `.env`) is the shared secret `mobile_api.py` checks against the `X-API-Key` header; every route but `/health` returns 503 until it's set.
 
 Local state/cache files are gitignored and regenerate on run: `screener_cache.json`, `watchlist.json`, `execution_logs.json`, `active_pairs.json`, `*.csv`, `*.xlsx`, `*.log`.
 
@@ -65,6 +68,8 @@ Tab → module map (see the `st.tabs([...])` call in `app.py`):
 **MCP servers** (two, independent, both `FastMCP`-based, both load `alpaca_trader.py`/local modules):
 - `mcp_server.py` — general-purpose tools for agents: watchlist, screener scores, Alpaca account/positions, trade execution.
 - `falcone_server.py` — a volume-spike/VPEI scanner over a hardcoded Nasdaq/Russell ticker universe plus synthetic-swap signal execution (`synthetic_swap_builder.py`); also runnable standalone as a polling loop via `--scanner --interval N` (writes to `falcone_engine.log`) instead of serving MCP.
+
+**`mobile_api.py`** — a `FastAPI` REST wrapper for mobile clients, no business logic of its own: it calls straight into `alpaca_trader.py` (account/positions/orders), `watchlist_manager.py`, and `screener.py` (`load_cache()` + `calculate_scores()` for `/screener`) and serializes the result. Every route except `/health` requires the `X-API-Key` header to match `MOBILE_API_KEY` from `.env`.
 
 **Algo routing / gating** (`algo_router.py`, rendered by `algo_router_ui.py` as the Bloomberg `ROUT` screen): the analytical check that decides *which* algorithm may run. `route()` builds a regime snapshot (session phase, VIX, realized vol, Kaufman efficiency ratio, breadth, rates) plus portfolio context, then scores each candidate (Falcone VPEI, stat-arb pairs, premarket volume-rate, TWAP/VWAP execution, market hedge) against hard gates → GO/CONDITIONAL/BLOCKED. `preflight_signals()` validates concrete Falcone signals (bar freshness, liquidity, RR, position-size cap incl. the contract-rounding interaction, cooldown, existing exposure) before execution. The router never places orders — extend the gate/score functions here rather than adding trigger conditions inside the individual algo modules. `falcone_server.scan_signals()` is the structured feed it consumes; `scan_markets()` is the text-formatting MCP wrapper around it.
 
