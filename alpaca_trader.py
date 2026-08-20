@@ -354,3 +354,57 @@ def get_account_activities(activity_types: Optional[List[str]] = None) -> List[D
     return []
 
 
+def place_statarb_pair_order(
+    ticker_a: str,
+    ticker_b: str,
+    side: str,
+    total_capital_usd: float = 10000.0,
+    price_a: float = 100.0,
+    price_b: float = 80.0,
+    hedge_ratio_beta: float = 1.0,
+    order_type: str = "market",
+    time_in_force: str = "gtc"
+) -> Dict[str, Any]:
+    """
+    Submits a dollar-neutral/beta-hedged Statistical Arbitrage pair trade to Alpaca.
+    
+    - LONG_SPREAD: Buy Leg A, Sell Leg B
+    - SHORT_SPREAD: Sell Leg A, Buy Leg B
+    """
+    if not is_alpaca_configured():
+        return {
+            "status": "error",
+            "message": "Alpaca API Keys are not configured. Please add ALPACA_API_KEY & ALPACA_SECRET_KEY to .env or environment."
+        }
+        
+    capital_per_leg = max(10.0, total_capital_usd * 0.5)
+    qty_a = max(1.0, float(round(capital_per_leg / max(price_a, 1e-4))))
+    qty_b = max(1.0, float(round((capital_per_leg * hedge_ratio_beta) / max(price_b, 1e-4))))
+    
+    side_clean = side.upper().strip()
+    if "LONG" in side_clean or "BUY_A" in side_clean:
+        side_a = "buy"
+        side_b = "sell"
+    else:
+        side_a = "sell"
+        side_b = "buy"
+        
+    res_a = place_order(ticker_a, qty_a, side_a, order_type=order_type, time_in_force=time_in_force)
+    res_b = place_order(ticker_b, qty_b, side_b, order_type=order_type, time_in_force=time_in_force)
+    
+    is_ok = (res_a.get("status") == "success") and (res_b.get("status") == "success")
+    return {
+        "status": "success" if is_ok else "error",
+        "ticker_a": ticker_a,
+        "ticker_b": ticker_b,
+        "qty_a": qty_a,
+        "qty_b": qty_b,
+        "side_a": side_a,
+        "side_b": side_b,
+        "order_a_res": res_a,
+        "order_b_res": res_b,
+        "message": "Successfully dispatched pair orders to Alpaca" if is_ok else f"Leg dispatch failed: A={res_a.get('message')}, B={res_b.get('message')}"
+    }
+
+
+
