@@ -149,7 +149,7 @@ st.markdown('<h1 class="main-header">📊 Stock Screener & Watchlist</h1>', unsa
 st.markdown('<p class="subheader">Scannen Sie Fundamental-Daten über Yahoo Finance und verwalten Sie Watchlists für Ihr Quantlib Tool</p>', unsafe_allow_html=True)
 
 # Sidebar Configuration
-st.sidebar.image("https://images.unsplash.com/photo-1590283603385-17ffb3a7f29f?auto=format&fit=crop&q=80&w=400", use_column_width=True)
+st.sidebar.image("https://images.unsplash.com/photo-1590283603385-17ffb3a7f29f?auto=format&fit=crop&q=80&w=400", use_container_width=True)
 st.sidebar.markdown("### ⚙️ Scan-Einstellungen")
 
 # Index Selection

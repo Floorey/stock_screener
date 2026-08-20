@@ -548,7 +548,7 @@ def render_performance_tab():
     if os.path.exists("arkham_logo.jpg"):
         col_logo, col_desc = st.columns([1, 4])
         with col_logo:
-            st.image("arkham_logo.jpg", use_column_width=True)
+            st.image("arkham_logo.jpg", use_container_width=True)
         with col_desc:
             st.markdown("""
             **Willkommen im Arkham Research Performance-Desk.**

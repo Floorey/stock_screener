@@ -3,10 +3,6 @@
   "provider": "mock",
   "log_level": "info",
   "shutdown_timeout": "10s",
-  "metrics": {
-    "enabled": true,
-    "path": "/metrics"
-  },
   "series": {
     "balance": {
       "enabled": true,

@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -84,17 +83,6 @@ func (a Alpaca) Configured() bool {
 	return a.KeyID != "" && a.SecretKey != ""
 }
 
-// Metrics configures the Prometheus scrape endpoint that Grafana reads. It is
-// served from the same in-memory buffer as the REST API, so scraping it costs
-// no broker rate-limit budget at any interval.
-type Metrics struct {
-	// Enabled toggles the endpoint. On by default: an unobserved trading
-	// backend is the thing this service exists to avoid.
-	Enabled bool `json:"enabled"`
-	// Path is where the exposition is served, e.g. "/metrics".
-	Path string `json:"path"`
-}
-
 // Config is the full server configuration.
 type Config struct {
 	// Addr is the listen address, e.g. "127.0.0.1:8080".
@@ -109,8 +97,6 @@ type Config struct {
 	Series map[string]SeriesConfig `json:"series"`
 	// Alpaca holds broker settings; credentials are injected from env.
 	Alpaca Alpaca `json:"alpaca"`
-	// Metrics configures the Prometheus endpoint scraped by Grafana.
-	Metrics Metrics `json:"metrics"`
 }
 
 // Default returns a runnable configuration: mock provider, localhost only.
@@ -141,10 +127,6 @@ func Default() Config {
 			StreamURL: "wss://stream.data.alpaca.markets",
 			Feed:      "iex",
 		},
-		Metrics: Metrics{
-			Enabled: true,
-			Path:    "/metrics",
-		},
 	}
 }
 
@@ -164,9 +146,7 @@ func Load(path string) (Config, error) {
 		}
 	}
 
-	if err := applyEnv(&cfg); err != nil {
-		return Config{}, err
-	}
+	applyEnv(&cfg)
 
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
@@ -174,9 +154,7 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
-// applyEnv layers environment overrides on top of the loaded config. It returns
-// an error rather than silently ignoring a malformed value.
-func applyEnv(cfg *Config) error {
+func applyEnv(cfg *Config) {
 	if v := os.Getenv("CC_ADDR"); v != "" {
 		cfg.Addr = v
 	}
@@ -185,16 +163,6 @@ func applyEnv(cfg *Config) error {
 	}
 	if v := os.Getenv("CC_LOG_LEVEL"); v != "" {
 		cfg.LogLevel = v
-	}
-	if v := strings.TrimSpace(os.Getenv("CC_METRICS_ENABLED")); v != "" {
-		parsed, err := strconv.ParseBool(v)
-		if err != nil {
-			return fmt.Errorf("CC_METRICS_ENABLED=%q is not a boolean", v)
-		}
-		cfg.Metrics.Enabled = parsed
-	}
-	if v := strings.TrimSpace(os.Getenv("CC_METRICS_PATH")); v != "" {
-		cfg.Metrics.Path = v
 	}
 	// Credentials are env-only, matching the Python side of the repo.
 	cfg.Alpaca.KeyID = strings.TrimSpace(os.Getenv("ALPACA_API_KEY"))
@@ -211,7 +179,6 @@ func applyEnv(cfg *Config) error {
 	if v := strings.TrimSpace(os.Getenv("ALPACA_FEED")); v != "" {
 		cfg.Alpaca.Feed = strings.ToLower(v)
 	}
-	return nil
 }
 
 // Validate checks the configuration for contradictions.
@@ -236,16 +203,6 @@ func (c *Config) Validate() error {
 	}
 	if len(c.Series) == 0 {
 		errs = append(errs, errors.New("no series configured"))
-	}
-	if c.Metrics.Enabled {
-		switch {
-		case !strings.HasPrefix(c.Metrics.Path, "/"):
-			errs = append(errs, fmt.Errorf(
-				"metrics.path %q must start with /", c.Metrics.Path))
-		case strings.HasPrefix(c.Metrics.Path, "/api/"):
-			errs = append(errs, fmt.Errorf(
-				"metrics.path %q collides with the REST API", c.Metrics.Path))
-		}
 	}
 
 	for name, sc := range c.Series {
