@@ -28,3 +28,13 @@ active_pairs.json
 # Local agent config, except shared skills (Antigravity reads .agents/skills/)
 /.agents/*
 !/.agents/skills/
+
+# Symlinked skill installed from .venv site-packages, machine-specific
+/.agents/skills/developing-with-streamlit
+/.claude/skills/developing-with-streamlit
+
+# graphify knowledge-graph output, regenerated on run
+/graphify-out/
+
+# Timestamped risk-report snapshots, regenerated on run (latest_risk_report.pdf stays tracked)
+reports/risk_report_*.pdf
