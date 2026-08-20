@@ -63,6 +63,8 @@ curl -H "X-API-Key: $MOBILE_API_KEY" "http://localhost:8000/screener?side=long&l
 
 Interactive OpenAPI docs are auto-served at `/docs` while the server is running.
 
+**If you are an MCP client** (Claude Desktop, Gemini CLI, or similar) rather than an HTTP client, `mcp_gateway/` exposes these same endpoints as MCP tools instead — see `mcp_gateway/README.md` for the stdio/HTTP config. It's a thin Go+Gin proxy in front of this same REST API, not a separate implementation.
+
 `/screener` reads from `screener_cache.json` as-is — it does not trigger a fresh scan (that's `run_screener()` in `screener.py`, which is slow/network-bound and only meant to run from the Streamlit sidebar or scheduled jobs). If the cache is empty, `/screener` returns `[]`.
 
 ## Conventions to respect

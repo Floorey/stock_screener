@@ -38,3 +38,7 @@ active_pairs.json
 
 # Timestamped risk-report snapshots, regenerated on run (latest_risk_report.pdf stays tracked)
 reports/risk_report_*.pdf
+
+# Compiled Go binaries (command_center/, mcp_gateway/)
+/command_center/command_center
+/mcp_gateway/mcp_gateway

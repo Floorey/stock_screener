@@ -28,6 +28,9 @@ python mcp_server.py
 # Run the mobile REST API (watchlist/screener/account/orders over HTTP, API-key gated)
 uvicorn mobile_api:app --host 0.0.0.0 --port 8000
 
+# Run the MCP gateway (exposes mobile_api.py as MCP tools; needs mobile_api.py running first)
+cd mcp_gateway && go build -o mcp_gateway . && ./mcp_gateway --transport=stdio   # or --transport=http --addr=:8090
+
 # One-off index shortlist scripts
 python short_sp500.py
 python short_nasdaq.py
@@ -70,6 +73,8 @@ Tab → module map (see the `st.tabs([...])` call in `app.py`):
 - `falcone_server.py` — a volume-spike/VPEI scanner over a hardcoded Nasdaq/Russell ticker universe plus synthetic-swap signal execution (`synthetic_swap_builder.py`); also runnable standalone as a polling loop via `--scanner --interval N` (writes to `falcone_engine.log`) instead of serving MCP.
 
 **`mobile_api.py`** — a `FastAPI` REST wrapper for mobile clients, no business logic of its own: it calls straight into `alpaca_trader.py` (account/positions/orders), `watchlist_manager.py`, and `screener.py` (`load_cache()` + `calculate_scores()` for `/screener`) and serializes the result. Every route except `/health` requires the `X-API-Key` header to match `MOBILE_API_KEY` from `.env`.
+
+**`mcp_gateway/`** — a standalone Go module (Gin for the HTTP transport, `mark3labs/mcp-go` for the MCP protocol) that re-exposes `mobile_api.py`'s endpoints as MCP tools, so MCP clients (Claude, Gemini CLI, other agents) can call them without speaking REST. It proxies every call to `mobile_api.py` rather than reimplementing Alpaca/screener logic in Go — `mobile_api.py` must be running first. Supports stdio (for a client that spawns it locally) and streamable HTTP (`--transport=http`, gated by `MCP_GATEWAY_KEY`) transports. See `mcp_gateway/README.md`.
 
 **Algo routing / gating** (`algo_router.py`, rendered by `algo_router_ui.py` as the Bloomberg `ROUT` screen): the analytical check that decides *which* algorithm may run. `route()` builds a regime snapshot (session phase, VIX, realized vol, Kaufman efficiency ratio, breadth, rates) plus portfolio context, then scores each candidate (Falcone VPEI, stat-arb pairs, premarket volume-rate, TWAP/VWAP execution, market hedge) against hard gates → GO/CONDITIONAL/BLOCKED. `preflight_signals()` validates concrete Falcone signals (bar freshness, liquidity, RR, position-size cap incl. the contract-rounding interaction, cooldown, existing exposure) before execution. The router never places orders — extend the gate/score functions here rather than adding trigger conditions inside the individual algo modules. `falcone_server.scan_signals()` is the structured feed it consumes; `scan_markets()` is the text-formatting MCP wrapper around it.
 
