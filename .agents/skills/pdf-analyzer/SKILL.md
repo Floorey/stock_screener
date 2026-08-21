@@ -2,7 +2,8 @@
 name: pdf-analyzer
 description: >-
   How the pdf_analyzer module in this repository works — the financial-report
-  extraction pipeline behind the Streamlit "PDF Finanzbericht Analyzer" tab in app.py.
+  extraction pipeline behind the "Klassischer Scanner" mode of the Streamlit
+  "Quartalsbericht-Analyzer" tab (qreport_ui.py).
   Use it whenever the work touches pdf_analyzer.py or that tab: extracting text from a
   10-K/10-Q or Geschäftsbericht, scanning for revenue / net income / EBIT / debt / cash
   flow figures, adding or changing a metric pattern, keyword search with context
@@ -22,9 +23,17 @@ description: >-
 
 `pdf_analyzer.py` (349 lines, repo root) turns a financial report — an uploaded PDF or
 an SEC filing fetched over HTTP — into text, then applies regex heuristics to pull out
-financial figures and keyword matches. Its only consumer is `app.py`, which imports
-seven functions at line 10 and drives them from the PDF analyzer tab (roughly lines
-2290–2600).
+financial figures and keyword matches. Its only consumer is `qreport_ui.py`, which
+imports six of its functions and drives them from the "Klassischer Scanner" mode of
+the Quartalsbericht-Analyzer tab.
+
+**It is no longer the primary path for quarterly figures.** `qreport_analyzer.py` does
+that job with SEC XBRL facts and LLM extraction, and every value it produces carries a
+source. Reach for `pdf_analyzer` when the structured path cannot help: keyword search
+with page context, or a report that has neither XBRL nor an API key behind it. When
+someone reports wrong numbers from the *classic scanner*, this skill explains why;
+when they report wrong numbers from the Q-Report tab's Ticker/PDF modes, the answer is
+in `qreport_analyzer.py`, not here.
 
 The thing to hold onto: **this is a heuristic text scraper, not a financial data
 parser.** It reads lines of text with regexes. It has no model of a table, a column, a
@@ -46,7 +55,7 @@ Three properties matter more than they look:
 1. **`page_number` is a label, not an index.** `extract_text_from_pdf` skips pages whose
    extracted text is falsy, so a scanned or image-only page simply never appears.
    `pages_data[i]["page_number"] != i + 1` in general, and `len(pages_data)` is *not*
-   the document's page count. `app.py` displays `len(pages_data)` to the user as
+   the document's page count. `qreport_ui.py` displays `len(pages_data)` to the user as
    "Abschnitte/Seiten" — deliberately vague wording, because it isn't reliably pages.
 2. **"Page" means something different per source.** For PDFs it is a real page. For SEC
    filings, `download_and_parse_filing` chunks the HTML text into pseudo-pages of 60
@@ -76,7 +85,7 @@ Three properties matter more than they look:
 `detect_report_locale` counts German vs English stopwords across the first five entries
 of `pages_data` and returns `"de"` or `"en"`. Its result feeds *only*
 `normalize_value_with_locale` — the metric patterns already contain both German and
-English aliases and match regardless of locale. In `app.py` the user can override the
+English aliases and match regardless of locale. In `qreport_ui.py` the user can override the
 detection with a dropdown, which is why the call site passes `effective_locale` rather
 than the detected value.
 
@@ -106,7 +115,7 @@ surprises people:
 Concretely, the line `"Revenue and operating income both improved in 2023 to 12,000"`
 appears under both Revenue and Operating Income in the scan, but only as Revenue in the
 structured output. If you change either loop, you change which figures reach the pivot
-table in `app.py`.
+table in `qreport_ui.py`.
 
 ## Four ways the numbers come out wrong
 
@@ -117,7 +126,7 @@ and the reasoning about what to do in `references/accuracy.md`.
 | Trap | What happens |
 |---|---|
 | **Scale from table headers is invisible** | `(in millions)` sits in a header line, not on the data line. `Total revenue 45,200` is read as 45,200 units, reported as `0.05` Mio — off by 10⁶. Inline suffixes (`$3.2 billion`, `2,5 Mrd.`) *are* handled correctly. |
-| **Column-table years don't pair** | Years live in a header row, values in data rows. With no year on the line, every value gets `Year: None` and drops out of the year-indexed pivot in `app.py`. Prose like `"revenue for 2023 was 45,200"` pairs fine. |
+| **Column-table years don't pair** | Years live in a header row, values in data rows. With no year on the line, every value gets `Year: None` and drops out of the year-indexed pivot in `qreport_ui.py`. Prose like `"revenue for 2023 was 45,200"` pairs fine. |
 | **Accounting negatives are lost** | `(1,234)` normalizes to `+1234.0`. A net loss is reported as a positive net income. Nothing in the module reads parentheses or trailing minus as a sign. |
 | **Positional year/value pairing** | When counts differ, years and values are zipped by order of appearance. Plausible-looking but arbitrary pairs result. |
 
@@ -170,7 +179,7 @@ process, and both have sharp edges worth knowing before you touch them:
 
 - `fetch_sec_filings` wraps everything in `except Exception: pass` and returns `[]`. A
   network failure, an auth problem and "this ticker has no filings" are indistinguishable
-  to the caller, and `app.py` reports all three as no filings found. If you are debugging
+  to the caller, and `qreport_ui.py` reports all three as no filings found. If you are debugging
   a report of "no filings", that swallowed exception is the first place to look.
 - It depends on the shape of `yfinance`'s `ticker.sec_filings`, including an `exhibits`
   dict — an unpinned upstream detail (`requirements.txt` says `yfinance>=0.2.38`) that

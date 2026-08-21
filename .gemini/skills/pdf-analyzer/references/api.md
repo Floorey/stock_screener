@@ -24,7 +24,7 @@ extract_text_from_pdf(pdf_file) -> List[Dict[str, Any]]
 ```
 
 *Line ~8.* Wraps `pypdf.PdfReader`. Accepts anything pypdf accepts: a path, a file-like
-object, or bytes. `app.py` passes `io.BytesIO(uploaded_file.read())`.
+object, or bytes. `qreport_ui.py` passes `io.BytesIO(uploaded_file.read())`.
 
 Returns `[{"page_number": 1-based int, "content": str}, ...]`.
 
@@ -32,9 +32,9 @@ Returns `[{"page_number": 1-based int, "content": str}, ...]`.
 - Pages whose `extract_text()` returns falsy are **omitted entirely** — not included with
   empty content. Scanned/image-only pages therefore vanish, leaving gaps in
   `page_number` and making `len(pages_data)` smaller than the real page count.
-- No OCR. A PDF that is entirely scanned images yields `[]`, and `app.py` surfaces that
+- No OCR. A PDF that is entirely scanned images yields `[]`, and `qreport_ui.py` surfaces that
   as "Text konnte nicht extrahiert werden."
-- Encrypted PDFs raise out of pypdf; `app.py` catches and shows the exception text.
+- Encrypted PDFs raise out of pypdf; `qreport_ui.py` catches and shows the exception text.
 - No page limit. A large filing is read fully into memory, synchronously.
 
 ## detect_report_locale
@@ -56,7 +56,7 @@ input both fall to `"en"`.
 - "First five pages" means the first five *surviving* entries, which may be pages 3, 7,
   9, 11, 12 of the actual document.
 - A German report with a heavily English cover page or an English-language summary can
-  misdetect. `app.py` exposes an explicit override dropdown for exactly this reason;
+  misdetect. `qreport_ui.py` exposes an explicit override dropdown for exactly this reason;
   when reproducing a user's result, ask which setting they had.
 - The result feeds only `normalize_value_with_locale`. It does **not** switch which
   metric patterns are used — those always include both languages.
@@ -127,7 +127,7 @@ thing to suspect if a value is 1000× or 10⁶× off with no visible unit.
 | `1.234` | **1.234** | 1234.0 |
 | `12.540` | 12540.0 | 12540.0 |
 
-The `12,540` and `1.234` rows are why the locale override in `app.py` matters: the same
+The `12,540` and `1.234` rows are why the locale override in `qreport_ui.py` matters: the same
 string means different numbers, and neither reading is inferable from the string alone.
 
 For German, a lone comma is read as a decimal separator unless there are more than two
@@ -165,7 +165,7 @@ metrics. This diverges from `extract_structured_financials`; see below.
 extract_structured_financials(pages_data, locale: str = "en") -> List[Dict[str, Any]]
 ```
 
-*Line ~191.* The main extraction path — the one feeding the pivot table in `app.py`.
+*Line ~191.* The main extraction path — the one feeding the pivot table in `qreport_ui.py`.
 Returns flat rows:
 
 ```python
@@ -241,7 +241,7 @@ but `page_number` now means "60-line chunk", not a page of anything.
 - `text_content()` flattens all markup, so table structure is destroyed. Cells that were
   columns become adjacent text, which is why HTML filings pair years and values even more
   unreliably than PDFs.
-- `raise_for_status()` propagates; `app.py` catches and displays the error.
+- `raise_for_status()` propagates; `qreport_ui.py` catches and displays the error.
 
 ## The metric patterns
 

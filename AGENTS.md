@@ -4,7 +4,7 @@ Cross-agent guide to this repository (Claude Code, Gemini CLI, Codex, Antigravit
 
 ## What this is
 
-A Python/Streamlit trading and research terminal ("Falcone Capital" branding in places) built around Alpaca (paper trading by default). It combines a fundamental stock screener, options/CDS analytics, PDF/SEC filing analysis, portfolio risk management, algo-trading backtests, an MCP server layer, and a REST API for mobile/frontend clients. UI strings are German (German-market-facing tool) — match that tone if you touch UI code.
+A Python/Streamlit trading and research terminal ("Falcone Capital" branding in places) built around Alpaca (paper trading by default). It combines a fundamental stock screener, options/CDS analytics, quarterly-report (10-Q) and SEC filing analysis, portfolio risk management, algo-trading backtests, an MCP server layer, and a REST API for mobile/frontend clients. UI strings are German (German-market-facing tool) — match that tone if you touch UI code.
 
 ## Running it
 
@@ -13,16 +13,17 @@ pip install -r requirements.txt          # venv already at .venv, Python 3.14
 
 streamlit run app.py                     # main dashboard, all tabs
 python screener.py                       # CLI screener test, no UI
+python qreport_analyzer.py AAPL          # CLI quarterly-report analysis, no UI
 python mcp_server.py                     # MCP server: watchlist/screener/account tools
 python falcone_server.py                 # MCP server: VPEI/volume-spike scanner
 uvicorn mobile_api:app --host 0.0.0.0 --port 8000   # REST API for mobile/frontend clients
 ```
 
-No lint/test tooling is configured (no pytest, no linter config). Verify changes by running the relevant module directly, or `streamlit run app.py` and exercising the affected tab.
+No lint/test tooling is configured (no pytest, no linter config); the `test_*.py` files at the repo root are plain `unittest` suites (`python -m unittest test_qreport_analyzer -v`). Verify changes by running the relevant module directly, or `streamlit run app.py` and exercising the affected tab.
 
 ## Architecture in one paragraph
 
-`app.py` is the Streamlit entrypoint; each dashboard tab either renders inline or delegates to `render_*_tab()` in a dedicated `*_ui.py` module. `screener.py` pulls fundamentals via `yfinance`, checks tradability via Alpaca, computes Long/Short scores, and caches results in `screener_cache.json` (keyed by ticker, each entry `{"timestamp": ..., "data": {...fields...}}`). `alpaca_trader.py` is the single source of truth for Alpaca account/positions/orders — every other module goes through it rather than calling the Alpaca REST API directly; `is_alpaca_configured()` gates all Alpaca-dependent paths. `watchlist_manager.py` is a flat JSON-file-backed ticker list. Full detail (tab→module map, algo router, report generation) is in `CLAUDE.md`.
+`app.py` is the Streamlit entrypoint; each dashboard tab either renders inline or delegates to `render_*_tab()` in a dedicated `*_ui.py` module. `screener.py` pulls fundamentals via `yfinance`, checks tradability via Alpaca, computes Long/Short scores, and caches results in `screener_cache.json` (keyed by ticker, each entry `{"timestamp": ..., "data": {...fields...}}`). `alpaca_trader.py` is the single source of truth for Alpaca account/positions/orders — every other module goes through it rather than calling the Alpaca REST API directly; `is_alpaca_configured()` gates all Alpaca-dependent paths. `watchlist_manager.py` is a flat JSON-file-backed ticker list. `qreport_analyzer.py` extracts quarterly KPIs from company reports — SEC XBRL facts, Claude-based extraction of the filing text or PDF (needs `ANTHROPIC_API_KEY`), and yfinance as fallback, merged by source precedence with the origin of every figure preserved. Full detail (tab→module map, algo router, report generation) is in `CLAUDE.md`.
 
 ## Mobile / frontend REST API (`mobile_api.py`)
 

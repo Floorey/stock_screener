@@ -43,7 +43,7 @@ Total revenue                     45,200    39,100
 
 Result: `Raw Value: '45,200'` → `Value (Mio): 0.05`.
 
-The company earned $45.2 billion. The pivot table in `app.py` reports 0.05 million. The
+The company earned $45.2 billion. The pivot table in `qreport_ui.py` reports 0.05 million. The
 scale declaration sat two lines above the data and was never read; `45,200` was taken as
 45,200 units, then divided by 10⁶ for the `Value (Mio)` column.
 
@@ -78,7 +78,7 @@ Same fixture. Every row comes back with `Year: None`:
 ```
 
 The years are in the header row; the data lines contain no `20xx`, so branch 4 of the
-pairing logic fires — one row per value, no year. `app.py` then filters on
+pairing logic fires — one row per value, no year. `qreport_ui.py` then filters on
 `extracted_df["Year"].notna()` to build the pivot table, so **these rows are dropped from
 the main comparison view entirely**. The user sees "Treffer gesamt: 6" and an empty or
 partial time series, which reads as a bug and is actually this.
@@ -181,7 +181,7 @@ Ordered by value per unit of risk:
    needs a UI signal for "scale inferred" so users can tell.
 3. **A confidence or provenance field** on each row — cheaper than fixing the pairing and
    arguably more honest: mark rows where the year came from the same line versus rows
-   where it is `None` or positionally guessed, and let `app.py` render the difference.
+   where it is `None` or positionally guessed, and let `qreport_ui.py` render the difference.
 4. **Table-aware extraction** (trap 2) — the real fix, and a dependency change. Worth
    proposing rather than starting unprompted.
 
@@ -191,12 +191,12 @@ what's wrong.
 
 ## Talking to users about the output
 
-The honest framing, and the one to use in `app.py` copy or in an answer:
+The honest framing, and the one to use in `qreport_ui.py` copy or in an answer:
 
 > This tool locates figures in a long report and tells you which page and line they came
 > from. Treat the numbers as candidates to check against the quoted line, not as
 > extracted financials — particularly the scale, and particularly for losses.
 
 `Page` and `Context` are the reliable columns; `Value (Mio)` is the unreliable one.
-`app.py` already leans this way — it shows the source line for each hit — and that is a
+`qreport_ui.py` already leans this way — it shows the source line for each hit — and that is a
 feature worth preserving in any redesign.

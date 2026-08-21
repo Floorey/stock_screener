@@ -12,6 +12,7 @@ __pycache__/
 
 # Local databases, data files and cache
 screener_cache.json
+qreport_cache.json
 watchlist.json
 execution_logs.json
 active_pairs.json
@@ -38,6 +39,9 @@ active_pairs.json
 
 # Timestamped risk-report snapshots, regenerated on run (latest_risk_report.pdf stays tracked)
 reports/risk_report_*.pdf
+
+# Generated quarterly research notes (Q-Report analyzer)
+reports/qreport_*.pdf
 
 # Compiled Go binaries (command_center/, mcp_gateway/)
 /command_center/command_center
