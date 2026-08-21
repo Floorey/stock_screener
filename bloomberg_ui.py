@@ -11,6 +11,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import polars as pl
 import numpy as np
+from typing import Any, Dict, List, Optional, Tuple, Union
 from alpaca_trader import is_alpaca_configured, get_positions, get_account_info
 from macro_fetcher import fetch_company_news
 from execution_algo import ExecutionAlgoManager

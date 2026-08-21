@@ -11,10 +11,12 @@ Dieses Tool hilft Ihnen dabei, fundamentale Daten von Aktien aus bekannten Indiz
 3. **Fundamental Scoring Engine (yFinance):**
    - Lädt Finanzkennzahlen (KGV, KBV, Debt/Equity, Current Ratio, Cashflows, Margen, ROE, FCF) herunter.
    - Berechnet einen **Long-Score** (Unterbewertung & hohe Qualität) und einen **Short-Score** (Überbewertung, hohe Verschuldung & Cash-Burn).
-4. **PDF Finanzbericht Analyzer:**
-   - Uploader für PDF-Berichte im Streamlit Dashboard.
-   - **Automatischer Scan** nach Zeilen mit wichtigen Finanzkennzahlen (Revenue, Net Income, Cash Flow, Debt).
-   - **Keyword-Suche** zur schnellen Analyse von Risikofaktoren, Outlooks oder speziellen Begriffen mit Seitennummerierung und Kontext.
+4. **Quartalsbericht-Analyzer (Q-Report):**
+   - **Ticker-Analyse:** zieht die Quartalszahlen als XBRL-Fakten direkt von der SEC (exakt, von der Gesellschaft selbst getaggt) und listet die verfügbaren 10-Q/10-K aus EDGAR.
+   - **LLM-Extraktion:** Claude liest den Berichtstext oder das hochgeladene PDF und liefert dieselbe Kennzahlenstruktur — auch für deutsche Quartalsberichte ohne XBRL.
+   - **QoQ/YoY-Vergleich** über Umsatz, Bruttoergebnis, EBIT, Konzernergebnis, EPS, operativen Cashflow, CapEx, Free Cashflow, Liquidität und Finanzverbindlichkeiten, inklusive Margenentwicklung.
+   - **Eigener PDF-Report je Ticker** mit Kennzahlen, Verlaufscharts, Margen und vollständigem Quellennachweis (XBRL-Tag bzw. Berichtsseite je Zahl).
+   - **Klassischer Scanner** (Regex-Heuristik + Keyword-Suche mit Seitenkontext) bleibt als dritter Modus erhalten.
 5. **Interaktives Streamlit Dashboard:**
    - Übersichtliche Visualisierung der Top-Kandidaten, Daten-Filterung, Excel/CSV-Export und Ticker-Einzelwertanalyse.
 
