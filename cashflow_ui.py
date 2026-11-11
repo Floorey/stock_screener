@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import yfinance as yf
 import os
 import sys
 import subprocess
@@ -25,7 +26,7 @@ from options_advisor import (
 )
 
 # Load environment
-load_dotenv(override=True)
+load_dotenv(override=False)
 
 # Path for persistent cashflow ledger
 LEDGER_PATH = os.path.join(os.path.dirname(__file__), "cashflow_ledger.csv")
@@ -229,12 +230,12 @@ def render_cashflow_tab(get_single_ticker_data, calculate_scores):
             try:
                 alpaca_acc = get_account_info()
                 if alpaca_acc:
-                    st.markdown("### 🦙 Alpaca Live-Konto (Echtzeit-Daten)")
+                    st.markdown("### 🦙 Alpaca Paper-Konto (Brokerdaten)")
                     alp_col1, alp_col2, alp_col3, alp_col4 = st.columns(4)
                     with alp_col1:
                         st.markdown(f"""
                         <div class="metric-card" style="text-align: center; border: 1px solid #10b981;">
-                            <span style="font-size: 0.9rem; color: #9ca3af;">Alpaca Live Cash</span>
+                            <span style="font-size: 0.9rem; color: #9ca3af;">Alpaca Paper Cash</span>
                             <h2 style="margin: 0.5rem 0; color: #10b981;">${float(alpaca_acc.get('cash', 0)):,.2f}</h2>
                             <span style="font-size: 0.8rem; color: #9ca3af;">Freies Barvermögen</span>
                         </div>
@@ -258,7 +259,7 @@ def render_cashflow_tab(get_single_ticker_data, calculate_scores):
                     with alp_col4:
                         from alpaca_trader import get_alpaca_credentials
                         _, _, base_url = get_alpaca_credentials()
-                        account_mode = "LIVE" if "live" in base_url.lower() else "PAPER"
+                        account_mode = "PAPER"
                         st.markdown(f"""
                         <div class="metric-card" style="text-align: center; border: 1px solid #f59e0b;">
                             <span style="font-size: 0.9rem; color: #9ca3af;">Handels-Modus</span>

@@ -99,3 +99,30 @@ git branch -M main
 git push -u origin main
 ```
 Lokale Änderungen an temporären Dateien (wie Cache, Watchlist und Exporte) sind über die Datei `.gitignore` bereits vom Commit ausgeschlossen, um sensible API-Schlüssel oder private Listen nicht öffentlich zu machen.
+
+
+## Prognose-Reiter (Kronos / Timestral)
+
+**Alpaca direkt** ist die Standardquelle: Ticker, Feed (IEX/SIP) und 1–20 Handelssitzungen wählen, dann **Daten laden**. Die Projekt-.env liefert ALPACA_API_KEY und ALPACA_SECRET_KEY ausschließlich serverseitig. 120 abgeschlossene Tageskerzen mit adjustment=all und Börsenkalender werden über den vorhandenen Alpaca-Leseclient abgerufen; Pagination wird vollständig verarbeitet, Wiederholungen und Lücken abgelehnt. Keine Datenbank und kein Modellserver zum Anzeigen der Kurse erforderlich.
+
+**Prognose berechnen** nutzt genau die geladenen Daten für Kronos, Timestral oder beide. Keine erneute Kursabfrage; keine automatische Berechnung bei Reiter-/Parameterwechsel. Bei geändertem Ticker/Feed/Quelle/Horizont erneut Daten laden. Bei nicht erreichbarem Modell bleiben die Kurse sichtbar. P10–P90 ist ein nominales 80%-Band, nicht empirisch kalibriert. Keine automatische Orderausführung.
+
+Die ausdrücklich auswählbare Quelle **Datenbank** liest den vorhandenen Analytics-Store. Keine stillen Quellenwechsel, keine automatische DB-Reparatur. Stand 11.11.2026: bestehender Kalender endet am 06.11.2026; diese Quelle meldet fehlende Zukunftssitzungen, bis der Kalender separat aktualisiert wurde. yfinance ist nicht Bestandteil dieses Prognose-Datenwegs.
+
+Prognosedienst: serverseitige TIMELINE_BASE_URL, Standard http://127.0.0.1:8081. Bei getrennten Containern muss die Adresse aus Sicht des Screeners erreichbar sein. Kein frei eingebbarer API-Host im Browser. Modell-POST-Timeout: 5 s Verbindung / 120 s Lesen, keine automatischen Wiederholungen.
+
+Dauerhafte separate Test-/Modellumgebung: `/home/lukasenderle/ChatGPT/stockscreener/.venv-forecast` (Python 3.12, CPU-PyTorch). Keine vorhandene .venv überschrieben. Lokaler Start des eigenständigen Timeline-Dienstes:
+
+```bash
+bash /home/lukasenderle/ChatGPT/stockscreener/tasks/run-timeline.sh
+```
+
+Screener mit derselben vollständigen Umgebung starten, sofern die bisherige Umgebung nicht zum Systeminterpreter passt:
+
+```bash
+/home/lukasenderle/ChatGPT/stockscreener/.venv-forecast/bin/python deploy/run.py app
+```
+
+Die Startbefehle richten keinen Boot-Autostart ein. Timeline benötigt gecachte Gewichte; HF_HUB_OFFLINE=1 verhindert Downloads. Exakte geprüfte Paketversionen und Tests: `/home/lukasenderle/ChatGPT/stockscreener/runs/direct-sources-20261111/`.
+
+Tests: `python -m unittest discover -s tests -p 'test_*.py' -v`. Echte Abnahme: `/home/lukasenderle/ChatGPT/stockscreener/tasks/direct_sources_e2e.py`; sie nutzt echte Alpaca-Leseabfragen, die laufende DB nur lesend und den vorgesehenen Timeline-Dienst.

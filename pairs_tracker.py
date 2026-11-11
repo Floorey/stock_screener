@@ -8,7 +8,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 
 # Load Alpaca configuration
-load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=True)
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=False)
 
 from alpaca_trader import place_order, get_positions, is_alpaca_configured
 from arbitrage_lab import StatisticalArbitrageLab

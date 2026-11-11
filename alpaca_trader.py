@@ -1,410 +1,256 @@
+"""Paper-only broker reads. Writes are exclusively previewed through paper_orders."""
 import os
-import sys
+import re
+from typing import Any
+from urllib.parse import quote
+
 import requests
-from typing import Dict, Any, List, Optional
-from dotenv import load_dotenv
 
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-if hasattr(sys.stderr, "reconfigure"):
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-
-# Ensure env vars are loaded and override any stale cache
-load_dotenv(override=True)
+PAPER_URL = "https://paper-api.alpaca.markets"
+DATA_URL = "https://data.alpaca.markets"
+BLOCKED_MESSAGE = "Direkte/automatische Ausführung gesperrt. Bitte den manuellen Paper-Desk mit Vorschau und Bestätigung verwenden."
 
 
-def get_alpaca_credentials() -> tuple[Optional[str], Optional[str], str]:
-    """Retrieves Alpaca API credentials from environment variables or active session."""
-    api_key = os.getenv("ALPACA_API_KEY")
-    secret_key = os.getenv("ALPACA_SECRET_KEY")
-    base_url = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
-    
-    # Strip any potential leading/trailing whitespace
-    if api_key:
-        api_key = api_key.strip()
-    if secret_key:
-        secret_key = secret_key.strip()
-    if base_url:
-        base_url = base_url.strip()
-        # Clean trailing slashes
-        if base_url.endswith("/"):
-            base_url = base_url[:-1]
-        # Clean trailing /v2
-        if base_url.endswith("/v2"):
-            base_url = base_url[:-3]
-        if base_url.endswith("/"):
-            base_url = base_url[:-1]
-        
-    return api_key, secret_key, base_url
+class AlpacaReadError(RuntimeError):
+    def __init__(self, message, status_code=None, retry_after=None, retryable=False):
+        super().__init__(message)
+        self.status_code = status_code
+        self.retry_after = retry_after
+        self.retryable = retryable
 
-def get_alpaca_headers() -> Dict[str, str]:
-    """Generates authentication headers for the Alpaca REST API."""
-    api_key, secret_key, _ = get_alpaca_credentials()
-    return {
-        "APCA-API-KEY-ID": api_key or "",
-        "APCA-API-SECRET-KEY": secret_key or "",
-        "Content-Type": "application/json"
-    }
 
-def is_alpaca_configured() -> bool:
-    """Checks whether the API keys are configured."""
-    api_key, secret_key, _ = get_alpaca_credentials()
-    return bool(api_key and secret_key)
+def load_paper_credentials(env_path=None):
+    """Refresh only Alpaca credentials from the explicit project .env on reruns."""
+    from pathlib import Path
+    from dotenv import dotenv_values
+    path = Path(env_path) if env_path is not None else Path(__file__).with_name(".env")
+    values = dotenv_values(path)
+    for name in ("ALPACA_API_KEY", "ALPACA_SECRET_KEY"):
+        if name in values:
+            os.environ[name] = values[name] or ""
 
-def get_account_info() -> Dict[str, Any]:
-    """
-    Fetches Alpaca account details (cash, buying power, equity, status, etc.).
-    Returns an empty dict if API is not configured or fails.
-    """
-    if not is_alpaca_configured():
-        return {}
-    
-    _, _, base_url = get_alpaca_credentials()
-    url = f"{base_url}/v2/account"
+
+def get_alpaca_credentials():
+    base = os.getenv("ALPACA_BASE_URL", PAPER_URL).strip()
+    if base != PAPER_URL:
+        raise AlpacaReadError("Nur der exakte Alpaca-Paper-Endpunkt ist zugelassen.")
+    return (os.getenv("ALPACA_API_KEY", "").strip(),
+            os.getenv("ALPACA_SECRET_KEY", "").strip(), base)
+
+
+def get_alpaca_headers():
+    key, secret, _ = get_alpaca_credentials()
+    if not key or not secret:
+        raise AlpacaReadError("Alpaca-Paper-Schlüssel sind serverseitig nicht vollständig konfiguriert.")
+    return {"APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret, "Content-Type": "application/json"}
+
+
+def is_alpaca_configured():
     try:
-        response = requests.get(url, headers=get_alpaca_headers(), timeout=10)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            print(f"[Alpaca Trader] Account fetch failed: Status {response.status_code}", file=sys.stderr)
-    except Exception as e:
-        print(f"[Alpaca Trader] Connection error during account fetch: {e}", file=sys.stderr)
-    return {}
-
-def verify_alpaca_connection() -> tuple[bool, str]:
-    """
-    Verifies the connection to Alpaca and returns a status flag and details.
-    Returns (True, message) if connection is successful, (False, details) otherwise.
-    """
-    if not is_alpaca_configured():
-        return False, "Alpaca API Keys sind nicht vollständig konfiguriert (Key ID und Secret Key werden benötigt)."
-        
-    api_key, secret_key, base_url = get_alpaca_credentials()
-    url = f"{base_url}/v2/account"
-    try:
-        response = requests.get(url, headers=get_alpaca_headers(), timeout=10)
-        if response.status_code == 200:
-            acc_data = response.json()
-            return True, f"Verbunden! Konto-Status: {acc_data.get('status', 'ACTIVE')}"
-        elif response.status_code == 401:
-            return False, "Fehler 401: Ungültige API-Schlüssel. Bitte prüfen Sie Key ID und Secret Key."
-        elif response.status_code == 403:
-            return False, "Fehler 403: Zugriff verweigert. Haben Sie Live-Keys mit der Paper-URL verwendet oder umgekehrt?"
-        else:
-            try:
-                err_msg = response.json().get("message", response.text)
-            except Exception:
-                err_msg = response.text
-            return False, f"Fehler {response.status_code}: {err_msg}"
-    except requests.exceptions.Timeout:
-        return False, "Verbindungsfehler: Zeitüberschreitung (Timeout) beim Verbinden mit Alpaca."
-    except requests.exceptions.ConnectionError:
-        return False, "Verbindungsfehler: Verbindung zum Alpaca-Server fehlgeschlagen. Bitte URL und Internet prüfen."
-    except Exception as e:
-        return False, f"Unbekannter Fehler: {str(e)}"
-
-
-def get_positions() -> List[Dict[str, Any]]:
-    """
-    Fetches currently open portfolio positions from Alpaca.
-    Returns a list of positions or an empty list.
-    """
-    if not is_alpaca_configured():
-        return []
-    
-    _, _, base_url = get_alpaca_credentials()
-    url = f"{base_url}/v2/positions"
-    try:
-        response = requests.get(url, headers=get_alpaca_headers(), timeout=10)
-        if response.status_code == 200:
-            return response.json()
-    except Exception as e:
-        print(f"[Alpaca Trader] Connection error during positions fetch: {e}", file=sys.stderr)
-    return []
-
-def get_open_orders() -> List[Dict[str, Any]]:
-    """
-    Fetches currently active/pending orders from Alpaca.
-    Returns a list of orders.
-    """
-    if not is_alpaca_configured():
-        return []
-    
-    _, _, base_url = get_alpaca_credentials()
-    url = f"{base_url}/v2/orders"
-    params = {"status": "open"}
-    try:
-        response = requests.get(url, headers=get_alpaca_headers(), params=params, timeout=10)
-        if response.status_code == 200:
-            return response.json()
-    except Exception as e:
-        print(f"[Alpaca Trader] Connection error during orders fetch: {e}", file=sys.stderr)
-    return []
-
-def place_order(
-    symbol: str, 
-    qty: float, 
-    side: str, 
-    order_type: str = "market", 
-    limit_price: Optional[float] = None,
-    time_in_force: str = "gtc"
-) -> Dict[str, Any]:
-    """
-    Places an order on Alpaca.
-    
-    :param symbol: Ticker symbol (e.g. 'AAPL')
-    :param qty: Quantity to buy/sell (can be float for fractional shares if supported, or int)
-    :param side: 'buy' or 'sell'
-    :param order_type: 'market', 'limit', 'stop', 'stop_limit'
-    :param limit_price: Required if order_type is 'limit' or 'stop_limit'
-    :param time_in_force: 'day', 'gtc', 'opg', 'cls', 'ioc', 'fok'
-    """
-    if not is_alpaca_configured():
-        return {"status": "error", "message": "Alpaca API Keys nicht in .env oder Sidebar konfiguriert."}
-    
-    _, _, base_url = get_alpaca_credentials()
-    url = f"{base_url}/v2/orders"
-    
-    # Ensure quantity is formatted appropriately (no unnecessary .0)
-    qty_str = str(int(qty)) if qty.is_integer() else str(qty)
-    
-    data = {
-        "symbol": symbol.upper().replace("-", "."), # Alpaca uses dots for class shares, e.g. BRK.B
-        "qty": qty_str,
-        "side": side.lower(),
-        "type": order_type.lower(),
-        "time_in_force": time_in_force.lower()
-    }
-    
-    if order_type.lower() in ["limit", "stop_limit"] and limit_price is not None:
-        data["limit_price"] = f"{limit_price:.2f}"
-        
-    try:
-        response = requests.post(url, headers=get_alpaca_headers(), json=data, timeout=10)
-        if response.status_code in [200, 201]:
-            return {"status": "success", "order": response.json()}
-        else:
-            try:
-                err_msg = response.json().get("message", response.text)
-            except Exception:
-                err_msg = response.text
-            return {"status": "error", "message": f"Alpaca API Error ({response.status_code}): {err_msg}"}
-    except Exception as e:
-        return {"status": "error", "message": f"Verbindungsfehler: {str(e)}"}
-
-def cancel_order(order_id: str) -> bool:
-    """Cancels a specific pending order by its order_id."""
-    if not is_alpaca_configured():
+        key, secret, _ = get_alpaca_credentials()
+        return bool(key and secret)
+    except AlpacaReadError:
         return False
-    
-    _, _, base_url = get_alpaca_credentials()
-    url = f"{base_url}/v2/orders/{order_id}"
-    try:
-        response = requests.delete(url, headers=get_alpaca_headers(), timeout=10)
-        return response.status_code == 204
-    except Exception as e:
-        print(f"[Alpaca Trader] Connection error during order cancellation: {e}", file=sys.stderr)
-    return False
 
-def cancel_all_orders() -> bool:
-    """Cancels all currently open orders."""
-    if not is_alpaca_configured():
-        return False
-    
-    _, _, base_url = get_alpaca_credentials()
-    url = f"{base_url}/v2/orders"
-    try:
-        response = requests.delete(url, headers=get_alpaca_headers(), timeout=10)
-        return response.status_code == 207  # Multi-status response for batch delete
-    except Exception as e:
-        print(f"[Alpaca Trader] Connection error during batch cancellation: {e}", file=sys.stderr)
-    return False
 
-def wait_for_order_fill(order_id: str, timeout: int = 15) -> bool:
-    """Polls the status of an Alpaca order until it is filled or times out."""
-    import time
-    if not is_alpaca_configured():
-        return False
-        
-    _, _, base_url = get_alpaca_credentials()
-    url = f"{base_url}/v2/orders/{order_id}"
-    
-    start_time = time.time()
-    while time.time() - start_time < timeout:
-        try:
-            response = requests.get(url, headers=get_alpaca_headers(), timeout=5)
-            if response.status_code == 200:
-                order_data = response.json()
-                status = order_data.get("status")
-                if status == "filled":
-                    return True
-                elif status in ["canceled", "rejected", "expired"]:
-                    print(f"[Alpaca] Order {order_id} ended with status: {status}", file=sys.stderr)
-                    return False
-            time.sleep(0.5)
-        except Exception as e:
-            print(f"[Alpaca] Error checking order fill status: {e}", file=sys.stderr)
-            time.sleep(0.5)
-            
-    print(f"[Alpaca] Order {order_id} did not fill within {timeout} seconds.", file=sys.stderr)
-    return False
-
-def close_position(symbol: str) -> bool:
-    """Closes/liquidates an open position by symbol using the DELETE endpoint."""
-    if not is_alpaca_configured():
-        return False
-        
-    _, _, base_url = get_alpaca_credentials()
-    url = f"{base_url}/v2/positions/{symbol.upper()}"
+def analytics_alpaca_get(path, params=None, *, data_api=True):
+    if not isinstance(path, str) or not path.startswith(("/v2/", "/v1beta1/")) or any(c in path for c in ("://", "?", "#", "..")):
+        raise AlpacaReadError("Unzulässiger Alpaca-Lesepfad.")
+    host = DATA_URL if data_api else get_alpaca_credentials()[2]
     try:
-        response = requests.delete(url, headers=get_alpaca_headers(), timeout=10)
-        return response.status_code in [200, 201, 204]
-    except Exception as e:
-        print(f"[Alpaca Trader] Connection error during position liquidation: {e}", file=sys.stderr)
-    return False
-
-def close_position_partial(symbol: str, qty: float) -> Dict[str, Any]:
-    """
-    Closes a partial amount of a position by symbol.
-    Uses the Alpaca DELETE /v2/positions/{symbol}?qty=X endpoint.
-    
-    :param symbol: Ticker symbol (e.g. 'AAPL')
-    :param qty: Number of shares to sell (must be <= current position qty)
-    :returns: Dict with 'status' ('success' or 'error') and details
-    """
-    if not is_alpaca_configured():
-        return {"status": "error", "message": "Alpaca API Keys nicht konfiguriert."}
-        
-    _, _, base_url = get_alpaca_credentials()
-    url = f"{base_url}/v2/positions/{symbol.upper()}"
-    
-    # Format qty: no unnecessary .0 for whole numbers
-    qty_str = str(int(qty)) if isinstance(qty, float) and qty.is_integer() else str(qty)
-    params = {"qty": qty_str}
-    
+        response = requests.get(host + path, headers=get_alpaca_headers(), params=params,
+                                timeout=15, allow_redirects=False)
+    except requests.RequestException:
+        raise AlpacaReadError("Alpaca-Leseanfrage fehlgeschlagen oder Zeitüberschreitung.", retryable=True) from None
+    if response.status_code != 200:
+        raise AlpacaReadError(f"Alpaca-Leseanfrage: HTTP {response.status_code}.",
+                              response.status_code, response.headers.get("Retry-After"))
     try:
-        response = requests.delete(url, headers=get_alpaca_headers(), params=params, timeout=10)
-        if response.status_code in [200, 201, 204]:
+        result = response.json()
+    except ValueError:
+        raise AlpacaReadError("Alpaca hat ungültiges JSON geliefert.") from None
+    if not isinstance(result, (dict, list)):
+        raise AlpacaReadError("Unerwartetes Alpaca-Antwortformat.")
+    return result
+
+
+def broker_get(path, params=None):
+    return analytics_alpaca_get(path, params, data_api=False)
+
+
+def get_account_info():
+    result = broker_get("/v2/account")
+    if not isinstance(result, dict) or not result.get("id"):
+        raise AlpacaReadError("Alpaca-Kontoidentität fehlt.")
+    return result
+
+
+def verify_alpaca_connection():
+    try:
+        account = get_account_info()
+        return True, f"PAPER verbunden; Konto {str(account['id'])[-8:]}; Status {account.get('status', 'unbekannt')}."
+    except AlpacaReadError as exc:
+        return False, str(exc)
+
+
+def _list(path, params=None):
+    result = broker_get(path, params)
+    if not isinstance(result, list):
+        raise AlpacaReadError("Alpaca hat keine gültige Liste geliefert.")
+    return result
+
+
+def get_positions():
+    return _list("/v2/positions")
+
+
+def get_open_orders():
+    return _list("/v2/orders", {"status": "open", "limit": 500, "nested": "true"})
+
+
+def get_asset(symbol):
+    return broker_get("/v2/assets/" + quote(symbol, safe=""))
+
+
+def get_option_contract(symbol):
+    return broker_get("/v2/options/contracts/" + quote(symbol, safe=""))
+
+
+def list_option_contracts(underlying, start, end):
+    """Complete broker catalog for an explicit expiry window; no market-data subscription needed."""
+    from datetime import date
+    if not isinstance(underlying, str) or not re.fullmatch(r"[A-Z][A-Z.]{0,9}", underlying):
+        raise AlpacaReadError("Ungültiger Basiswert.")
+    try:
+        first, last = date.fromisoformat(start), date.fromisoformat(end)
+        if first > last or (last-first).days > 90:
+            raise ValueError
+    except (ValueError, TypeError):
+        raise AlpacaReadError("Verfallsfenster muss gültig und höchstens 90 Tage lang sein.") from None
+    params = {"underlying_symbols": underlying, "expiration_date_gte": start,
+              "expiration_date_lte": end, "status": "active", "limit": 1000}
+    contracts, seen, cursors = [], set(), set()
+    for _ in range(100):
+        result = broker_get("/v2/options/contracts", params)
+        if not isinstance(result, dict) or not isinstance(result.get("option_contracts"), list):
+            raise AlpacaReadError("Ungültiger Optionskatalog vom Broker.")
+        for contract in result["option_contracts"]:
+            if not isinstance(contract, dict):
+                raise AlpacaReadError("Ungültiger Optionskontrakt vom Broker.")
+            symbol = contract.get("symbol")
+            if (contract.get("underlying_symbol") != underlying or contract.get("status") != "active"
+                    or contract.get("tradable") is not True or str(contract.get("size")) != "100"):
+                continue
+            if not isinstance(symbol, str) or not re.fullmatch(r"[A-Z]{1,6}\d{6}[CP]\d{8}", symbol):
+                raise AlpacaReadError("Optionskatalog enthält ein ungültiges Kontraktsymbol.")
             try:
-                order_data = response.json()
-            except Exception:
-                order_data = {}
-            return {"status": "success", "order": order_data}
-        else:
-            try:
-                err_msg = response.json().get("message", response.text)
-            except Exception:
-                err_msg = response.text
-            return {"status": "error", "message": f"Alpaca API Error ({response.status_code}): {err_msg}"}
-    except Exception as e:
-        return {"status": "error", "message": f"Verbindungsfehler: {str(e)}"}
+                from decimal import Decimal
+                expiry = date.fromisoformat(contract["expiration_date"])
+                strike = Decimal(str(contract["strike_price"]))
+                if not first <= expiry <= last or contract.get("type") not in ("call", "put") or not strike.is_finite() or strike <= 0:
+                    raise ValueError
+            except (KeyError, ValueError, ArithmeticError):
+                raise AlpacaReadError("Optionskatalog enthält ungültige Verfalls-/Strike-Daten.") from None
+            if symbol not in seen:
+                contracts.append(contract)
+                seen.add(symbol)
+        cursor = result.get("next_page_token")
+        if not cursor:
+            return contracts
+        if not isinstance(cursor, str) or cursor in cursors:
+            raise AlpacaReadError("Optionskatalog wiederholt seine Seitennummer.")
+        cursors.add(cursor)
+        params = {**params, "page_token": cursor}
+    raise AlpacaReadError("Optionskatalog zu groß. Bitte engeres Verfallsfenster wählen.")
 
-def get_position_for_symbol(symbol: str) -> Optional[Dict[str, Any]]:
-    """
-    Fetches the current position for a specific symbol from Alpaca.
-    Returns the position dict or None if no position exists.
-    """
-    if not is_alpaca_configured():
-        return None
-        
-    _, _, base_url = get_alpaca_credentials()
-    url = f"{base_url}/v2/positions/{symbol.upper()}"
+
+def get_order(order_id):
+    if not isinstance(order_id, str) or not re.fullmatch(r"[A-Za-z0-9-]+", order_id):
+        raise AlpacaReadError("Ungültige Broker-Order-ID.")
+    result = broker_get("/v2/orders/" + order_id)
+    if not isinstance(result, dict) or result.get("id") != order_id or not result.get("status"):
+        raise AlpacaReadError("Broker-Orderidentität oder Status stimmt nicht überein.")
+    return result
+
+
+def get_order_by_client_id(client_order_id):
     try:
-        response = requests.get(url, headers=get_alpaca_headers(), timeout=10)
-        if response.status_code == 200:
-            return response.json()
-    except Exception as e:
-        print(f"[Alpaca Trader] Connection error fetching position for {symbol}: {e}", file=sys.stderr)
-    return None
-
-def get_position_qty(symbol: str) -> float:
-    """
-    Returns the current quantity (number of shares) held for a given symbol.
-    Returns 0.0 if no position exists or API is not configured.
-    """
-    pos = get_position_for_symbol(symbol)
-    if pos:
-        return float(pos.get("qty", 0))
-    return 0.0
-
-def get_account_activities(activity_types: Optional[List[str]] = None) -> List[Dict[str, Any]]:
-    """
-    Fetches account activity from Alpaca.
-    Useful for retrieving trade fills, dividends, fees, etc.
-    """
-    if not is_alpaca_configured():
-        return []
-        
-    _, _, base_url = get_alpaca_credentials()
-    url = f"{base_url}/v2/account/activities"
-    
-    headers = get_alpaca_headers()
-    params = {}
-    if activity_types:
-        params["activity_types"] = ",".join(activity_types)
-        
-    try:
-        response = requests.get(url, headers=headers, params=params, timeout=10)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            print(f"[Alpaca Trader] Activities fetch failed: Status {response.status_code} - {response.text}", file=sys.stderr)
-    except Exception as e:
-        print(f"[Alpaca Trader] Connection error during activities fetch: {e}", file=sys.stderr)
-    return []
+        return broker_get("/v2/orders:by_client_order_id", {"client_order_id": client_order_id})
+    except AlpacaReadError as exc:
+        if exc.status_code == 404:
+            return None
+        raise
 
 
-def place_statarb_pair_order(
-    ticker_a: str,
-    ticker_b: str,
-    side: str,
-    total_capital_usd: float = 10000.0,
-    price_a: float = 100.0,
-    price_b: float = 80.0,
-    hedge_ratio_beta: float = 1.0,
-    order_type: str = "market",
-    time_in_force: str = "gtc"
-) -> Dict[str, Any]:
-    """
-    Submits a dollar-neutral/beta-hedged Statistical Arbitrage pair trade to Alpaca.
-    
-    - LONG_SPREAD: Buy Leg A, Sell Leg B
-    - SHORT_SPREAD: Sell Leg A, Buy Leg B
-    """
-    if not is_alpaca_configured():
-        return {
-            "status": "error",
-            "message": "Alpaca API Keys are not configured. Please add ALPACA_API_KEY & ALPACA_SECRET_KEY to .env or environment."
-        }
-        
-    capital_per_leg = max(10.0, total_capital_usd * 0.5)
-    qty_a = max(1.0, float(round(capital_per_leg / max(price_a, 1e-4))))
-    qty_b = max(1.0, float(round((capital_per_leg * hedge_ratio_beta) / max(price_b, 1e-4))))
-    
-    side_clean = side.upper().strip()
-    if "LONG" in side_clean or "BUY_A" in side_clean:
-        side_a = "buy"
-        side_b = "sell"
+def get_latest_quote(symbol, *, option=False):
+    feed = os.getenv("ALPACA_OPTION_FEED", "indicative") if option else os.getenv("ALPACA_STOCK_FEED", "sip")
+    allowed = ("opra", "indicative") if option else ("iex", "sip", "delayed_sip")
+    if feed not in allowed:
+        raise AlpacaReadError("Unbekannter Marktdatenfeed.")
+    if option:
+        result = analytics_alpaca_get("/v1beta1/options/quotes/latest", {"symbols": symbol, "feed": feed})
+        quote_data = result.get("quotes", {}).get(symbol)
     else:
-        side_a = "sell"
-        side_b = "buy"
-        
-    res_a = place_order(ticker_a, qty_a, side_a, order_type=order_type, time_in_force=time_in_force)
-    res_b = place_order(ticker_b, qty_b, side_b, order_type=order_type, time_in_force=time_in_force)
-    
-    is_ok = (res_a.get("status") == "success") and (res_b.get("status") == "success")
-    return {
-        "status": "success" if is_ok else "error",
-        "ticker_a": ticker_a,
-        "ticker_b": ticker_b,
-        "qty_a": qty_a,
-        "qty_b": qty_b,
-        "side_a": side_a,
-        "side_b": side_b,
-        "order_a_res": res_a,
-        "order_b_res": res_b,
-        "message": "Successfully dispatched pair orders to Alpaca" if is_ok else f"Leg dispatch failed: A={res_a.get('message')}, B={res_b.get('message')}"
-    }
+        result = analytics_alpaca_get("/v2/stocks/quotes/latest", {"symbols": symbol, "feed": feed})
+        quote_data = result.get("quotes", {}).get(symbol)
+    if not isinstance(quote_data, dict):
+        raise AlpacaReadError("Aktuelle Geld-/Briefkurse fehlen.")
+    return {**quote_data, "feed": feed}
 
 
+def get_position_for_symbol(symbol):
+    try:
+        return broker_get("/v2/positions/" + quote(symbol.upper(), safe=""))
+    except AlpacaReadError as exc:
+        if exc.status_code == 404:
+            return None
+        raise
 
+
+def get_position_qty(symbol):
+    result = get_position_for_symbol(symbol)
+    return float(result["qty"]) if result else 0.0
+
+
+def get_account_activities(activity_types=None):
+    params = {"activity_types": ",".join(activity_types)} if activity_types else None
+    return _list("/v2/account/activities", params)
+
+
+def place_order(*args, **kwargs):
+    return {"status": "error", "message": BLOCKED_MESSAGE}
+
+
+def place_statarb_pair_order(*args, **kwargs):
+    return place_order()
+
+
+def close_position_partial(*args, **kwargs):
+    return place_order()
+
+
+def cancel_order(*args, **kwargs):
+    return False
+
+
+def cancel_all_orders(*args, **kwargs):
+    return False
+
+
+def close_position(*args, **kwargs):
+    return False
+
+
+def wait_for_order_fill(*args, **kwargs):
+    raise AlpacaReadError(BLOCKED_MESSAGE)
+
+
+def _paper_write(method, path, payload=None):
+    """Transport for durably claimed manual intents in paper_orders only."""
+    if method not in ("post", "delete") or not re.fullmatch(r"/v2/orders(?:/[A-Za-z0-9-]+)?", path):
+        raise AlpacaReadError("Ungültiger manueller Paper-Schreibpfad.")
+    headers = get_alpaca_headers()
+    if os.getenv("ALPACA_TRADING_ENABLED", "false").lower() != "true":
+        raise AlpacaReadError("Paper-Handel serverseitig gesperrt.")
+    return getattr(requests, method)(PAPER_URL + path, headers=headers, json=payload,
+                                     timeout=15, allow_redirects=False)

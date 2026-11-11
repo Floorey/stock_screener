@@ -1,0 +1,10 @@
+[Unit]
+Description=Blackgate market data import
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/lukasenderle/ChatGPT/blackgate_analytics/stock_screener
+ExecStart=/home/lukasenderle/ChatGPT/blackgate_analytics/stock_screener/.venv/bin/python deploy/run.py import import --source alpaca --feed sip
+UMask=0077
+NoNewPrivileges=true
+TimeoutStartSec=4h

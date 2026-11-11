@@ -305,7 +305,7 @@ def fetch_portfolio_context() -> Dict[str, Any]:
         "error": None,
     }
     if not ctx["alpaca"]:
-        ctx["equity"] = 100_000.0  # Demo-Equity, identisch zu execute_signal
+        ctx["error"] = "Paper-Konto nicht verbunden; Depotkontext unbekannt."
         return ctx
 
     try:

@@ -1,0 +1,11 @@
+[Unit]
+Description=Collect Blackgate market observations every 15 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=15min
+Persistent=true
+Unit=blackgate-analytics-import.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,12 @@
+[Unit]
+Description=Original Blackgate Streamlit terminal
+
+[Service]
+WorkingDirectory=/home/lukasenderle/ChatGPT/blackgate_analytics/stock_screener
+ExecStart=/home/lukasenderle/ChatGPT/blackgate_analytics/stock_screener/.venv/bin/python deploy/run.py app
+Restart=on-failure
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target
