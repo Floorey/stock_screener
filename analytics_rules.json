@@ -1,0 +1,7 @@
+{
+  "version": "stress-rules-1.0.0",
+  "symbol": "SPY",
+  "daily_return_pct_lte": -2.0,
+  "five_session_return_pct_lte": -5.0,
+  "description": "Feste Forschungsregeln ohne Optimierung oder Prognosekalibrierung: SPY-Tagesrendite ≤ -2 % ODER Rendite über fünf vollständige Börsensitzungen ≤ -5 %. Jeder qualifizierte Tag ist ein Ereignis; überlappende Fenster sind abhängig."
+}

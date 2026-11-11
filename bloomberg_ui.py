@@ -1,3 +1,4 @@
+from typing import Any, Dict, Optional, Tuple, Union
 import streamlit as st
 import os
 import pandas as pd
@@ -1220,9 +1221,16 @@ def render_bloomberg_tab():
             try:
                 positions = get_positions()
                 acc_info = get_account_info()
-            except Exception:
-                alpaca_ok = False
-                
+            except Exception as exc:
+                st.error(f"Paper-Portfolio konnte nicht gelesen werden: {exc}")
+                return
+        if alpaca_ok and not positions:
+            st.info("Broker bestätigt: keine offenen Positionen.")
+            st.json({k: acc_info.get(k) for k in ("id", "status", "equity", "cash")})
+            return
+        if not alpaca_ok and not st.checkbox("Musterdepot ausdrücklich anzeigen", value=False, key="bbg_demo_opt_in"):
+            st.info("Kein verbundenes Paper-Konto. Das Musterdepot ist separat zuschaltbar.")
+            return
         if alpaca_ok and positions:
             df_port = get_portfolio_data(alpaca_positions=positions)
             cash = float(acc_info.get("cash", 0))
@@ -1236,7 +1244,7 @@ def render_bloomberg_tab():
             total_cost = df_port["Cost Basis"].sum()
             total_pnl = portfolio_value - (total_cost + cash)
             total_pnl_pct = (total_pnl / total_cost) * 100.0 if total_cost > 0 else 0.0
-            pnl_status_text = "LIVE ALPACA BROKERAGE ACCOUNT"
+            pnl_status_text = "ALPACA PAPER BROKERAGE ACCOUNT"
         else:
             # Mock portfolio prices live
             with st.spinner("Aktualisiere Marktpreise für Musterdepot..."):

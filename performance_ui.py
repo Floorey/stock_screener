@@ -24,7 +24,7 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib.units import inch
 
 # Load env variables
-load_dotenv(override=True)
+load_dotenv(override=False)
 
 # CSS for DC Comic Style - Arkham Asylum Aesthetic
 ARKHAM_STYLE = """
@@ -675,39 +675,9 @@ def render_performance_tab():
                     is_real = True
             
             if df_port_history.empty:
-                if portfolio_mode == "Alpaca Depot-Verbindung (Live/Paper)":
-                    st.info("ℹ️ Keine Alpaca-Historie gefunden oder Alpaca nicht konfiguriert. Fallback auf Backtest der aktuellen Alpaca-Positionen.")
-                
-                # Fallback backtest of current Alpaca positions
-                positions = []
-                if is_alpaca_configured():
-                    try:
-                        positions = get_positions()
-                    except Exception:
-                        pass
-                
-                # Mock holdings if no positions found
-                if not positions:
-                    positions = [
-                        {"symbol": "SPY", "qty": "50", "market_value": "24000.0"},
-                        {"symbol": "QQQ", "qty": "30", "market_value": "12000.0"},
-                        {"symbol": "TLT", "qty": "100", "market_value": "9000.0"}
-                    ]
-                
-                total_val = sum(float(p.get("market_value", 0)) for p in positions)
-                if total_val <= 0:
-                    total_val = 10000.0
-                
-                alpaca_holdings = {}
-                for p in positions:
-                    sym = p["symbol"]
-                    parsed = parse_osi_symbol(sym)
-                    underlying = parsed["underlying"]
-                    mkt_val = float(p.get("market_value", 0))
-                    alpaca_holdings[underlying] = alpaca_holdings.get(underlying, 0.0) + (mkt_val / total_val)
-                    
-                custom_holdings = alpaca_holdings
-                
+                st.warning("Paper-Depothistorie nicht verfügbar. Kein Ersatz durch Musterpositionen oder rückgerechnete heutige Bestände.")
+                return
+
         # Calculate simulated returns if custom holdings are defined
         if not is_real and custom_holdings:
             # Fetch components

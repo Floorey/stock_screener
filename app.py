@@ -1,6 +1,9 @@
 import streamlit as st
 from dotenv import load_dotenv
-load_dotenv(override=True)
+from pathlib import Path
+load_dotenv(Path(__file__).resolve().with_name(".env"), override=False)
+from alpaca_trader import load_paper_credentials
+load_paper_credentials()
 import pandas as pd
 import os
 import sys
@@ -169,54 +172,17 @@ limit_tickers = st.sidebar.slider(
     help="Begrenzt die Anzahl der geladenen Aktien (Beschleunigt das Testen)."
 )
 
-# Expandable Alpaca integration (completely optional)
-with st.sidebar.expander("🦙 Alpaca Integration (Optional)", expanded=False):
-    st.markdown("<small>Falls Sie Handelsberechtigung/Leihbarkeit über Alpaca filtern möchten:</small>", unsafe_allow_html=True)
-    alpaca_key = st.text_input("Alpaca API Key ID", value=os.getenv("ALPACA_API_KEY", ""), type="password")
-    alpaca_secret = st.text_input("Alpaca API Secret Key", value=os.getenv("ALPACA_SECRET_KEY", ""), type="password")
-    alpaca_url = st.text_input("Alpaca API Base URL", value=os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets"))
-
-    # Update environment variables based on inputs
-    if alpaca_key:
-        os.environ["ALPACA_API_KEY"] = alpaca_key.strip()
-    if alpaca_secret:
-        os.environ["ALPACA_SECRET_KEY"] = alpaca_secret.strip()
-    if alpaca_url:
-        os.environ["ALPACA_BASE_URL"] = alpaca_url.strip()
-
-    # Save to .env button
-    if alpaca_key or alpaca_secret:
-        if st.button("Schlüssel in .env speichern", use_container_width=True):
-            env_path = os.path.join(os.path.dirname(__file__), ".env")
-            try:
-                lines = []
-                if os.path.exists(env_path):
-                    with open(env_path, "r", encoding="utf-8") as f:
-                        lines = f.readlines()
-                
-                new_lines = []
-                for line in lines:
-                    if not any(line.strip().startswith(prefix) for prefix in ["ALPACA_API_KEY=", "ALPACA_SECRET_KEY=", "ALPACA_BASE_URL="]):
-                        new_lines.append(line)
-                
-                new_lines.append(f"ALPACA_API_KEY={alpaca_key.strip()}\n")
-                new_lines.append(f"ALPACA_SECRET_KEY={alpaca_secret.strip()}\n")
-                new_lines.append(f"ALPACA_BASE_URL={alpaca_url.strip()}\n")
-                
-                with open(env_path, "w", encoding="utf-8") as f:
-                    f.writelines(new_lines)
-                st.success("Erfolgreich in .env gespeichert!")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Fehler beim Speichern: {e}")
-
-    # Visual connection status check
-    if os.getenv("ALPACA_API_KEY") or os.getenv("ALPACA_SECRET_KEY"):
+# Broker credentials remain server-side; this UI never reads or writes secrets.
+with st.sidebar.expander("🦙 Alpaca Paper", expanded=False):
+    from alpaca_trader import PAPER_URL
+    st.caption("Schlüssel und Kontozuordnung werden ausschließlich serverseitig konfiguriert.")
+    st.code(PAPER_URL)
+    if st.button("Paper-Verbindung prüfen"):
         is_ok, status_msg = verify_alpaca_connection()
         if is_ok:
-            st.success(f"🟢 Alpaca {status_msg}")
+            st.success(status_msg)
         else:
-            st.error(f"🔴 {status_msg}")
+            st.error(status_msg)
 
 # Trigger scan button
 start_scan = st.sidebar.button("🔍 Screener starten")
@@ -239,7 +205,7 @@ if "macro_futures_df" in st.session_state and not st.session_state["macro_future
     )
 
 # Initialize Tabs
-tab_bbg, tab1, tab_wl, tab_opt, tab_perf, tab2, tab_trade, tab_cash, tab_strat, tab_risk, tab_algo, tab3, tab_tok = st.tabs([
+tab_bbg, tab1, tab_wl, tab_opt, tab_perf, tab2, tab_trade, tab_cash, tab_strat, tab_risk, tab_algo, tab3, tab_tok, tab_stress, tab_forecast = st.tabs([
     "📟 Bloomberg Terminal",
     "🎯 Screener Dashboard", 
     "⭐ Watchlist Manager", 
@@ -252,7 +218,9 @@ tab_bbg, tab1, tab_wl, tab_opt, tab_perf, tab2, tab_trade, tab_cash, tab_strat, 
     "🛡️ Risk-Manager & Stress-Test",
     "🔬 Algo-Trading Testlab",
     "📄 PDF Finanzbericht Analyzer",
-    "🪙 LLM-Token-Tracker"
+    "🪙 LLM-Token-Tracker",
+    "📉 Marktstress",
+    "🔮 Prognose"
 ])
 
 # ----------------------------------------------------
@@ -1101,457 +1069,9 @@ with tab2:
 # TAB TRADE: ALPACA TRADING PORTFOLIO & ORDERS
 # ----------------------------------------------------
 with tab_trade:
-    st.markdown('<div class="wl-banner"><h2>💼 Alpaca Portfolio & Trading Desk</h2></div>', unsafe_allow_html=True)
-    
-    # Option 2: CLO-ETF Quick Selector
-    st.markdown("### 🏷️ CLO-ETF Schnell-Auswahl (Option 2)")
-    st.markdown("<small>Wähle einen der CLO-ETFs aus, um ihn direkt im Trading Desk (rechts) zu laden und zu handeln:</small>", unsafe_allow_html=True)
-    clo_cols = st.columns(5)
-    clo_etfs = [
-        ("JAAA", "Janus Henderson AAA CLO ETF"),
-        ("JBBB", "Janus Henderson B-BBB CLO ETF"),
-        ("CLOI", "VanEck CLO ETF"),
-        ("RAAA", "Reckoner Yield Enhanced AAA CLO ETF"),
-        ("RAAR", "Reckoner Yield Enhanced AAA CLO Reinvesting ETF")
-    ]
-    for i, (symbol, name) in enumerate(clo_etfs):
-        with clo_cols[i]:
-            if st.button(f"Trade {symbol}", key=f"trade_clo_btn_{symbol}", help=name, use_container_width=True):
-                st.session_state["trading_desk_symbol"] = symbol
-                st.rerun()
-    st.markdown("---")
-    
-    if not is_alpaca_configured():
-        st.warning("⚠️ Alpaca API-Schlüssel sind nicht konfiguriert.")
-        st.markdown("""
-        Um Trading zu aktivieren, tragen Sie bitte Ihre **Alpaca API Keys** in der linken Seitenleiste unter **Alpaca Integration** ein oder hinterlegen Sie diese in der `.env`-Datei:
-        ```env
-        ALPACA_API_KEY=dein_key_id
-        ALPACA_SECRET_KEY=dein_secret_key
-        ALPACA_BASE_URL=https://paper-api.alpaca.markets
-        ```
-        *Hinweis: Verwenden Sie für Tests immer Ihre **Paper Trading Keys**, um echtes Geld zu schützen!*
-        """)
-    else:
-        # Load account information
-        with st.spinner("Lade Alpaca-Kontodaten..."):
-            acc = get_account_info()
-            positions = get_positions()
-            open_orders = get_open_orders()
-            
-        if not acc:
-            st.error("Fehler beim Abrufen der Alpaca-Kontodaten. Bitte überprüfen Sie Ihre API-Schlüssel.")
-        else:
-            # Styled metrics
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.markdown(f"""
-                <div class="metric-card">
-                    <span style="font-size: 0.9rem; color: #9ca3af;">Portfolio-Wert (Equity)</span>
-                    <h2 style="margin: 0.5rem 0; color: #3b82f6;">${float(acc.get('equity', 0)):,.2f}</h2>
-                    <span style="font-size: 0.8rem; color: #9ca3af;">Konto-Status: {acc.get('status', 'ACTIVE')}</span>
-                </div>
-                """, unsafe_allow_html=True)
-            with col2:
-                st.markdown(f"""
-                <div class="metric-card">
-                    <span style="font-size: 0.9rem; color: #9ca3af;">Freies Bargeld (Cash)</span>
-                    <h2 style="margin: 0.5rem 0; color: #10b981;">${float(acc.get('cash', 0)):,.2f}</h2>
-                    <span style="font-size: 0.8rem; color: #9ca3af;">Unverplantes Kapital</span>
-                </div>
-                """, unsafe_allow_html=True)
-            with col3:
-                st.markdown(f"""
-                <div class="metric-card">
-                    <span style="font-size: 0.9rem; color: #9ca3af;">Kaufkraft (Buying Power)</span>
-                    <h2 style="margin: 0.5rem 0; color: #8b5cf6;">${float(acc.get('buying_power', 0)):,.2f}</h2>
-                    <span style="font-size: 0.8rem; color: #9ca3af;">Hebel-Kaufkraft</span>
-                </div>
-                """, unsafe_allow_html=True)
-            with col4:
-                api_key, _, base_url = get_alpaca_credentials()
-                account_mode = "LIVE" if "live" in base_url.lower() else "PAPER"
-                st.markdown(f"""
-                <div class="metric-card">
-                    <span style="font-size: 0.9rem; color: #9ca3af;">Handels-Modus</span>
-                    <h2 style="margin: 0.5rem 0; color: #f59e0b;">{account_mode}</h2>
-                    <span style="font-size: 0.8rem; color: #9ca3af;">Währung: {acc.get('currency', 'USD')}</span>
-                </div>
-                """, unsafe_allow_html=True)
-                
-            st.markdown("<br>", unsafe_allow_html=True)
-            
-            # Divide page into layout: Left side Positions & Orders, Right side Trading Desk
-            pos_col, order_desk_col = st.columns([3, 2])
-            
-            with pos_col:
-                st.markdown("### 📈 Offene Positionen")
-                if not positions:
-                    st.info("Keine offenen Positionen in deinem Alpaca-Portfolio.")
-                else:
-                    pos_list = []
-                    for p in positions:
-                        symbol = p.get('symbol')
-                        qty = float(p.get('qty', 0))
-                        market_value = float(p.get('market_value', 0))
-                        cost_basis = float(p.get('cost_basis', 0))
-                        avg_entry = float(p.get('avg_entry_price', 0))
-                        current_price = float(p.get('current_price', 0))
-                        unrealized_pl = float(p.get('unrealized_pl', 0))
-                        unrealized_pl_pct = float(p.get('unrealized_plpc', 0)) * 100
-                        
-                        pos_list.append({
-                            "Symbol": symbol,
-                            "Menge": qty,
-                            "Akt. Kurs": f"${current_price:.2f}",
-                            "Durchschn. Einstieg": f"${avg_entry:.2f}",
-                            "Marktwert": f"${market_value:.2f}",
-                            "Kostenbasis": f"${cost_basis:.2f}",
-                            "GuV ($)": unrealized_pl,
-                            "GuV (%)": f"{unrealized_pl_pct:.2f}%"
-                        })
-                    
-                    df_pos = pd.DataFrame(pos_list)
-                    
-                    def highlight_pl(val):
-                        # Ensure profit/loss has colors
-                        if isinstance(val, (int, float)):
-                            color = '#10b981' if val >= 0 else '#ef4444'
-                            return f'color: {color}; font-weight: bold;'
-                        return ''
-                    
-                    st.dataframe(
-                        df_pos.style.map(highlight_pl, subset=['GuV ($)']),
-                        use_container_width=True,
-                        hide_index=True
-                    )
-                    
-                    # Close position form (supports full close AND partial sell)
-                    st.markdown("#### 🚪 Position schließen / Teilverkauf")
-                    
-                    # Sort symbols alphabetically to ensure stable selectbox order
-                    position_symbols = sorted([p["symbol"] for p in positions])
-                    
-                    # Track selected position in session state to prevent selection jumping
-                    if "last_selected_position" not in st.session_state or st.session_state["last_selected_position"] not in position_symbols:
-                        st.session_state["last_selected_position"] = position_symbols[0] if position_symbols else None
-                    
-                    default_idx = 0
-                    if st.session_state["last_selected_position"] in position_symbols:
-                        default_idx = position_symbols.index(st.session_state["last_selected_position"])
-                    
-                    close_col1, close_col2 = st.columns([3, 2])
-                    with close_col1:
-                        position_to_close = st.selectbox(
-                            "Wählen Sie eine Position:",
-                            options=position_symbols,
-                            index=default_idx,
-                            format_func=lambda x: f"{x} ({next(item for item in positions if item['symbol'] == x)['qty']} Anteile, GuV: ${float(next(item for item in positions if item['symbol'] == x)['unrealized_pl']):,.2f})",
-                            key="position_to_close_select"
-                        )
-                    
-                    # Update session state with current selection
-                    st.session_state["last_selected_position"] = position_to_close
-                    
-                    # Get the selected position's qty
-                    selected_pos_qty = float(next(item for item in positions if item['symbol'] == position_to_close)['qty'])
-                    
-                    with close_col2:
-                        close_mode = st.radio(
-                            "Verkaufsmodus:",
-                            ["🚪 Komplett glattstellen", "✂️ Teilverkauf"],
-                            horizontal=True,
-                            key="close_mode_radio"
-                        )
-                    
-                    if "Teilverkauf" in close_mode:
-                        teil_col1, teil_col2 = st.columns([3, 1])
-                        with teil_col1:
-                            # Dynamic key based on symbol to isolate slider state per position
-                            sell_qty = st.slider(
-                                f"Anzahl zu verkaufen (von {selected_pos_qty:.0f} Anteilen):",
-                                min_value=1,
-                                max_value=int(abs(selected_pos_qty)),
-                                value=min(1, int(abs(selected_pos_qty))),
-                                step=1,
-                                key=f"partial_sell_qty_slider_{position_to_close}"
-                            )
-                            remaining = abs(selected_pos_qty) - sell_qty
-                            st.markdown(f"📊 **Verkauf:** {sell_qty} Anteile | **Verbleibend nach Verkauf:** {remaining:.0f} Anteile")
-                        with teil_col2:
-                            st.markdown("<br>", unsafe_allow_html=True)
-                            if st.button("✂️ Teilverkauf ausführen", use_container_width=True, key="partial_sell_btn"):
-                                with st.spinner(f"Verkaufe {sell_qty} Anteile von {position_to_close}..."):
-                                    result = close_position_partial(position_to_close, float(sell_qty))
-                                    if result.get("status") == "success":
-                                        st.success(f"✅ {sell_qty} Anteile von {position_to_close} erfolgreich verkauft. Verbleibend: {remaining:.0f} Anteile.")
-                                        st.rerun()
-                                    else:
-                                        st.error(f"Fehler: {result.get('message', 'Unbekannter Fehler')}")
-                    else:
-                        close_btn_col1, close_btn_col2 = st.columns([3, 1])
-                        with close_btn_col2:
-                            st.markdown("<br>", unsafe_allow_html=True)
-                            if st.button("🚪 Komplett glattstellen", use_container_width=True, key="close_position_btn"):
-                                with st.spinner(f"Schließe Position {position_to_close}..."):
-                                    if close_position(position_to_close):
-                                        st.success(f"Position {position_to_close} wurde erfolgreich glattgestellt.")
-                                        st.rerun()
-                                    else:
-                                        st.error(f"Fehler: Position {position_to_close} konnte nicht geschlossen werden.")
-                                    
-                st.markdown("### ⏳ Offene Orders")
-                if not open_orders:
-                    st.info("Keine ausstehenden (offenen) Orders.")
-                else:
-                    order_list = []
-                    for o in open_orders:
-                        order_list.append({
-                            "Symbol": o.get('symbol'),
-                            "Aktion": o.get('side').upper(),
-                            "Typ": o.get('type').upper(),
-                            "Menge": float(o.get('qty', 0)),
-                            "Limit-Preis": f"${float(o.get('limit_price', 0)):.2f}" if o.get('limit_price') else "N/A",
-                            "TIF": o.get('time_in_force').upper(),
-                            "Status": o.get('status').upper(),
-                            "Erstellt am": o.get('created_at')[:19].replace('T', ' '),
-                            "ID": o.get('id')
-                        })
-                    
-                    df_ord = pd.DataFrame(order_list)
-                    st.dataframe(df_ord.drop(columns=["ID"]), use_container_width=True, hide_index=True)
-                    
-                    # Cancel order form
-                    st.markdown("#### Order stornieren")
-                    cancel_col1, cancel_col2 = st.columns([3, 1])
-                    with cancel_col1:
-                        order_to_cancel = st.selectbox(
-                            "Wählen Sie eine Order zum Stornieren:",
-                            options=[o["ID"] for o in order_list],
-                            format_func=lambda x: f"{next(item for item in order_list if item['ID'] == x)['Aktion']} {next(item for item in order_list if item['ID'] == x)['Menge']} {next(item for item in order_list if item['ID'] == x)['Symbol']} (erstellt: {next(item for item in order_list if item['ID'] == x)['Erstellt am']})"
-                        )
-                    with cancel_col2:
-                        st.markdown("<br>", unsafe_allow_html=True)
-                        if st.button("❌ Order abbrechen", use_container_width=True):
-                            if cancel_order(order_to_cancel):
-                                st.success("Order wurde storniert.")
-                                st.rerun()
-                            else:
-                                st.error("Order konnte nicht storniert werden.")
-                                
-                    if st.button("🔥 Alle offenen Orders stornieren", use_container_width=True):
-                        if cancel_all_orders():
-                            st.success("Alle offenen Orders wurden storniert.")
-                            st.rerun()
-                        else:
-                            st.error("Fehler beim Stornieren aller Orders.")
-            
-            with order_desk_col:
-                st.markdown("### 🎛️ Trading Desk")
-                
-                # Preset symbols from watchlists or portfolio
-                suggested_symbols = set()
-                suggested_symbols.update([p.get('symbol') for p in positions])
-                suggested_symbols.update(watchlist_tickers)
-                if "screener_results" in st.session_state:
-                    suggested_symbols.update(st.session_state["screener_results"]["Symbol"].tolist())
-                # Option 2: CLO-ETFs
-                suggested_symbols.update(["JAAA", "JBBB", "CLOI", "RAAA", "RAAR"])
-                
-                trade_symbol = st.selectbox(
-                    "Wertpapier-Symbol",
-                    options=sorted(list(suggested_symbols)),
-                    key="trading_desk_symbol"
-                )
-                
-                custom_symbol = st.text_input("Anderes Ticker-Symbol eingeben:", "").strip().upper()
-                final_trade_symbol = custom_symbol if custom_symbol else trade_symbol
-                
-                if final_trade_symbol:
-                    # Show price estimate via yfinance
-                    try:
-                        price_ticker = yf.Ticker(final_trade_symbol)
-                        current_p = price_ticker.info.get('currentPrice') or price_ticker.info.get('previousClose', 0.0)
-                        st.markdown(f"**Geschätzter aktueller Preis:** `${current_p:.2f}` (über Yahoo Finance)")
-                    except Exception:
-                        current_p = 0.0
-                        st.markdown("**Geschätzter aktueller Preis:** `N/A` (yFinance nicht erreichbar)")
-                        
-                    t_side = st.radio("Transaktionsart", ["Kauf (Buy)", "Verkauf (Sell)"], horizontal=True)
-                    t_type = st.selectbox("Order-Typ", ["Market", "Limit"])
-                    
-                    t_limit_price = None
-                    if t_type == "Limit":
-                        t_limit_price = st.number_input("Limit Preis ($)", min_value=0.01, value=float(current_p) if current_p else 10.0, step=0.01)
-                        
-                    t_qty = st.number_input("Stückzahl", min_value=0.01, value=1.0, step=1.0)
-                    
-                    # Estimate total cost
-                    if current_p and t_qty:
-                        est_total = current_p * t_qty
-                        st.markdown(f"**Geschätzter Gesamtwert:** `${est_total:,.2f}`")
-                        
-                    # Execute button
-                    side_action = "buy" if "Kauf" in t_side else "sell"
-                    btn_color = "🟢" if side_action == "buy" else "🔴"
-                    
-                    if st.button(f"{btn_color} Order an Alpaca übermitteln", use_container_width=True):
-                        with st.spinner("Übermittle Order an Alpaca..."):
-                            res = place_order(
-                                symbol=final_trade_symbol,
-                                qty=t_qty,
-                                side=side_action,
-                                order_type=t_type.lower(),
-                                limit_price=t_limit_price
-                            )
-                            if res.get("status") == "success":
-                                ord_data = res.get("order", {})
-                                st.success(f"Order erfolgreich übermittelt! ID: {ord_data.get('id', 'N/A')} | Status: {ord_data.get('status', 'N/A')}")
-                                st.rerun()
-                            else:
-                                st.error(f"Fehler beim Übermitteln der Order: {res.get('message')}")
+    from paper_order_ui import render_paper_order_tab
+    render_paper_order_tab()
 
-            # Render Pairs Tracker
-            from pairs_tracker import render_pairs_tracker_widget
-            render_pairs_tracker_widget(positions)
-
-    # ----------------------------------------------------
-    # SINGLE SCRIPTS RUNNER SECTION
-    # ----------------------------------------------------
-    st.markdown("---")
-    st.markdown("### 📜 System-Skripte ausführen")
-    st.markdown("Führen Sie eines der Absicherungs- oder Risikomanagement-Skripte direkt auf dem Server aus und sehen Sie die Live-Konsolenausgabe.")
-    
-    script_choice = st.selectbox(
-        "Wählen Sie ein Skript:",
-        [
-            "short_nasdaq.py (NASDAQ Short Hedge)",
-            "short_sp500.py (S&P 500 Short Hedge)",
-            "short_russell.py (Russell 2000 Short Hedge)",
-            "risk_manager.py (Portfolio Risk Analyzer)",
-            "synthetic_swap_builder.py (Synthetic Swap Builder)"
-        ],
-        key="selected_single_script"
-    )
-    
-    # Dynamic controls
-    cmd_args = []
-    if "short_" in script_choice:
-        col_c1, col_c2, col_c3 = st.columns(3)
-        with col_c1:
-            run_type = st.selectbox(
-                "Absicherungs-Typ:",
-                ["put (OTM Put-Option)", "synthetic (Option A)", "short (Physischer ETF-Short)"],
-                key="run_type_select"
-            )
-            type_val = run_type.split()[0]
-            cmd_args += ["--type", type_val]
-        with col_c2:
-            run_qty = st.number_input(
-                "Menge/Kontrakte:",
-                min_value=1,
-                value=1,
-                step=1,
-                key="run_qty_input"
-            )
-            cmd_args += ["--qty", str(run_qty)]
-        with col_c3:
-            run_otm = st.slider(
-                "Abstand vom Kurs für Puts (%):",
-                min_value=2.0,
-                max_value=20.0,
-                value=5.0,
-                step=0.5,
-                key="run_otm_slider"
-            )
-            if type_val == "put":
-                cmd_args += ["--otm", f"{run_otm:.1f}"]
-                
-    elif "synthetic_swap_builder.py" in script_choice:
-        col_s1, col_s2, col_s3 = st.columns(3)
-        with col_s1:
-            sw_ticker = st.text_input(
-                "Basiswert Ticker (Aktie/ETF):",
-                value="AAPL",
-                key="sw_ticker_input"
-            ).upper().strip()
-            cmd_args += ["--ticker", sw_ticker]
-        with col_s2:
-            sw_dir = st.selectbox(
-                "Richtung (Long/Short):",
-                ["long (Synthetic Long)", "short (Synthetic Short)"],
-                key="sw_dir_select"
-            )
-            dir_val = sw_dir.split()[0]
-            cmd_args += ["--direction", dir_val]
-        with col_s3:
-            sw_qty = st.number_input(
-                "Menge/Kontrakte (je 100 Aktien):",
-                min_value=1,
-                value=1,
-                step=1,
-                key="sw_qty_input"
-            )
-            cmd_args += ["--qty", str(sw_qty)]
-            
-        col_s4, col_s5 = st.columns(2)
-        with col_s4:
-            sw_strike = st.text_input(
-                "Basispreis (Strike) [Optional, leer lassen für ATM]:",
-                value="",
-                key="sw_strike_input"
-            ).strip()
-            if sw_strike:
-                try:
-                    cmd_args += ["--strike", str(float(sw_strike))]
-                except ValueError:
-                    st.warning("Bitte geben Sie eine gültige Zahl für den Strike ein (oder leer lassen).")
-        with col_s5:
-            sw_expiry = st.text_input(
-                "Ablaufdatum (YYYY-MM-DD) [Optional, leer lassen für ca. 30 Tage DTE]:",
-                value="",
-                key="sw_expiry_input"
-            ).strip()
-            if sw_expiry:
-                cmd_args += ["--expiry", sw_expiry]
-                
-    if st.button("🚀 Skript jetzt ausführen", key="execute_single_script_btn"):
-        script_filename = script_choice.split()[0]
-        script_path = os.path.join(os.path.dirname(__file__), script_filename)
-        
-        if not os.path.exists(script_path):
-            st.error(f"Skript-Datei `{script_filename}` wurde unter `{script_path}` nicht gefunden.")
-        else:
-            with st.spinner(f"Führe `python {script_filename} {' '.join(cmd_args)}` aus..."):
-                import subprocess
-                try:
-                    # Construct subprocess call
-                    cmd = [sys.executable, script_path] + cmd_args
-                    result = subprocess.run(cmd, capture_output=True, text=True, cwd=os.path.dirname(__file__), timeout=30)
-                    
-                    st.markdown("**Konsolenausgabe (Stdout):**")
-                    if result.stdout:
-                        st.code(result.stdout, language="text")
-                    else:
-                        st.info("Keine Standardausgabe.")
-                        
-                    if result.stderr:
-                        st.markdown("**Fehlerausgabe (Stderr):**")
-                        st.code(result.stderr, language="text")
-                        
-                    if result.returncode == 0:
-                        st.success(f"Skript `{script_filename}` wurde erfolgreich beendet (Exit Code 0).")
-                    else:
-                        st.error(f"Skript `{script_filename}` wurde mit Fehlercode {result.returncode} beendet.")
-                except subprocess.TimeoutExpired:
-                    st.error("Zeitüberschreitung: Das Skript hat länger als 30 Sekunden für die Ausführung benötigt.")
-                except Exception as e:
-                    st.error(f"Fehler beim Ausführen des Skripts: {e}")
-
-
-# ----------------------------------------------------
-# TAB CASH: CASHFLOW MANAGEMENT
-# ----------------------------------------------------
 with tab_cash:
     render_cashflow_tab(get_single_ticker_data, calculate_scores)
 
@@ -1997,7 +1517,7 @@ with tab_strat:
                     else:
                         account_mode = "PAPER"
                         api_key, _, base_url = get_alpaca_credentials()
-                        if "live" in base_url.lower():
+                        if base_url != "https://paper-api.alpaca.markets":
                             account_mode = "LIVE"
                             st.warning("⚠️ ACHTUNG: Dies ist ein LIVE-Konto. Ein Klick auf den Button führt zu echtem Geldhandel!")
                         else:
@@ -2111,7 +1631,7 @@ with tab_strat:
 # ----------------------------------------------------
 with tab_risk:
     st.markdown('<div class="wl-banner"><h2>🛡️ Blackgate Capital Risk-Manager & Stress-Test</h2></div>', unsafe_allow_html=True)
-    st.markdown("Analysieren Sie das Risiko Ihres Gesamtportfolios auf Basis von *Value at Risk (VaR)* und simulieren Sie makroökonomische Krisenszenarien.")
+    st.markdown("Illustrative historische Aktien-VaR und feste Schockszenarien. Optionsrisiko benötigt vollständige Greeks und ist hier nicht als vollständiger Depotverlust verfügbar.")
     
     # Check daemon status/info
     st.info("💡 **Hintergrund-Bot:** Sie können den Risk-Manager als Daemon-Bot im Hintergrund starten, der Ihr Portfolio alle 10 Minuten überwacht und Berichte speichert. Führen Sie dazu im Terminal aus: `python risk_manager.py --daemon`")
@@ -2122,7 +1642,7 @@ with tab_risk:
             positions = fetch_portfolio_positions()
             acc_info = get_account_info()
             if not acc_info:
-                acc_info = {"equity": 100000.0, "cash": 100000.0, "buying_power": 400000.0}
+                raise ValueError("Broker-Kontodaten fehlen; keine Ersatzwerte.")
                 
             equity_val = float(acc_info.get("equity", 100000.0))
             
@@ -2646,3 +2166,12 @@ with tab_tok:
     render_token_tracker_tab()
 
 
+
+with tab_stress:
+    from market_stress_ui import render_market_stress_tab
+    render_market_stress_tab()
+
+
+with tab_forecast:
+    from forecast_ui import render_forecast_tab
+    render_forecast_tab()

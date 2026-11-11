@@ -1,0 +1,10 @@
+{
+  "version": "2026-11-06.1",
+  "selection": "Kuratiertes historisches Startset; Ereignistage sind keine trainierten Stresslabels.",
+  "events": [
+    {"id":"lehman-2008","date":"2008-09-15","name":"Lehman-Insolvenz","source":"https://www.federalreservehistory.org/essays/lehman-brothers-collapse"},
+    {"id":"flash-crash-2010","date":"2010-05-06","name":"Flash Crash","source":"https://www.sec.gov/files/marketevents-report.pdf"},
+    {"id":"covid-2020","date":"2020-03-16","name":"COVID-19 Marktstress","source":"https://www.federalreserve.gov/newsevents/pressreleases/monetary20200315a.htm"},
+    {"id":"svb-2023","date":"2023-03-10","name":"Schließung Silicon Valley Bank","source":"https://www.fdic.gov/news/press-releases/2023/pr23016.html"}
+  ]
+}

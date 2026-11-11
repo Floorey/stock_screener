@@ -23,6 +23,11 @@ load_dotenv()
 
 app = FastAPI(title="Falcone Capital Mobile API", version="1.0.0")
 
+@app.exception_handler(at.AlpacaReadError)
+async def broker_error(request, exc):
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=502, content={"detail": str(exc), "data_quality": "unavailable"})
+
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 

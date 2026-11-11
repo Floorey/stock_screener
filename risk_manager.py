@@ -42,44 +42,19 @@ def parse_osi_symbol(symbol: str) -> dict:
     return {"is_option": False, "underlying": symbol}
 
 def get_underlying_price_and_delta(symbol: str) -> tuple[float, float, str]:
-    """
-    Gets the current underlying price and option delta if it is an option.
-    Returns (underlying_price, delta, underlying_symbol).
-    """
+    from alpaca_trader import get_latest_quote
     parsed = parse_osi_symbol(symbol)
     if parsed["is_option"]:
-        underlying = parsed["underlying"]
-        # Fetch current price of underlying
-        try:
-            tk = yf.Ticker(underlying)
-            hist = tk.history(period="1d")
-            s = hist["Close"].iloc[-1] if not hist.empty else 100.0
-        except Exception:
-            s = 100.0
-            
-        # Estimate delta using Black-Scholes
-        k = parsed["strike"]
-        # calculate remaining days to expiry
-        today = datetime.now().date()
-        try:
-            expiry_dt = datetime.strptime(parsed["expiry"], "%Y-%m-%d").date()
-            days = max((expiry_dt - today).days, 1)
-        except Exception:
-            days = 30
-            
-        option_type = parsed["type"]
-        # Default parameters: 4.5% interest, 25% Implied Volatility
-        delta, _ = calculate_black_scholes_metrics(s=s, k=k, days=days, r=0.045, iv=0.25, option_type=option_type)
-        return s, delta, underlying
-    else:
-        # Standard Stock / ETF
-        try:
-            tk = yf.Ticker(symbol)
-            hist = tk.history(period="1d")
-            s = hist["Close"].iloc[-1] if not hist.empty else 100.0
-        except Exception:
-            s = 100.0
-        return s, 1.0, symbol
+        raise ValueError("Optionsrisiko unvollständig: keine validierten Greeks/Vollbewertung in diesem Legacy-Modul. DATA_QUALITY_HOLD.")
+    quote = get_latest_quote(symbol)
+    from datetime import timezone
+    stamp = datetime.fromisoformat(quote["t"].replace("Z", "+00:00"))
+    if not -5 <= (datetime.now(timezone.utc) - stamp).total_seconds() <= 120:
+        raise ValueError("Basiswertkurs ist veraltet.")
+    bid, ask = float(quote["bp"]), float(quote["ap"])
+    if not np.isfinite(bid + ask) or bid <= 0 or ask < bid:
+        raise ValueError("Basiswertkurs ungültig.")
+    return (bid + ask) / 2, 1.0, symbol
 
 def get_portfolio_beta(ticker: str) -> float:
     """Returns estimated beta for the ticker relative to S&P 500."""
@@ -93,110 +68,53 @@ def get_portfolio_beta(ticker: str) -> float:
     return betas.get(ticker, 1.0)
 
 def fetch_portfolio_positions() -> list[dict]:
-    """
-    Fetches positions from Alpaca. If empty or not configured,
-    returns a mock portfolio containing the Option A Synthetic Short setup.
-    """
+    """Broker-confirmed positions only; no demo or error fallback."""
     positions = []
-    if is_alpaca_configured():
-        alp_positions = get_positions()
-        for p in alp_positions:
-            symbol = p["symbol"]
-            qty = float(p["qty"])
-            market_val = float(p["market_value"])
-            avg_entry = float(p["avg_entry_price"])
-            
-            # Get underlying and delta
-            s, delta, underlying = get_underlying_price_and_delta(symbol)
-            beta = get_portfolio_beta(underlying)
-            
-            positions.append({
-                "symbol": symbol,
-                "qty": qty,
-                "market_value": market_val,
-                "price": market_val / qty if qty != 0 else 0.0,
-                "underlying": underlying,
-                "underlying_price": s,
-                "delta": delta,
-                "beta": beta,
-                "is_option": symbol != underlying
-            })
-            
-    if not positions:
-        # Load mock portfolio representing Option A and some tech/index allocations
-        # Let's say: 100 SPY, 1 contract TLT Synthetic Short (Long Put, Short Call at $90)
-        mock_positions = [
-            {"symbol": "SPY", "qty": 100, "market_value": 48000.0, "price": 480.0, "underlying": "SPY", "underlying_price": 480.0, "delta": 1.0, "beta": 1.0, "is_option": False},
-            {"symbol": "TLT260717P00090000", "qty": 1, "market_value": 150.0, "price": 150.0, "underlying": "TLT", "underlying_price": 90.0, "delta": -0.50, "beta": -0.15, "is_option": True},
-            {"symbol": "TLT260717C00090000", "qty": -1, "market_value": -140.0, "price": 140.0, "underlying": "TLT", "underlying_price": 90.0, "delta": -0.50, "beta": -0.15, "is_option": True} # short call has short delta
-        ]
-        return mock_positions
-        
+    for p in get_positions():
+        symbol, qty = p["symbol"], float(p["qty"])
+        market_val = float(p["market_value"])
+        price, delta, underlying = get_underlying_price_and_delta(symbol)
+        positions.append({"symbol": symbol, "qty": qty, "market_value": market_val,
+                          "price": market_val / qty if qty else 0.0, "underlying": underlying,
+                          "underlying_price": price, "delta": delta,
+                          "beta": get_portfolio_beta(underlying), "is_option": symbol != underlying})
     return positions
 
 def calculate_portfolio_var(positions: list[dict], confidence=0.95) -> tuple[float, float]:
-    """
-    Calculates Parametric Value at Risk (VaR) based on historical standard deviation.
-    confidence: 0.95 or 0.99
-    Returns (VaR_USD, VaR_Percent)
-    """
-    total_val = sum(abs(p["market_value"]) for p in positions)
-    if total_val == 0:
+    """Illustrative one-day historical-normal equity VaR, signed exposure and complete observations."""
+    if confidence not in (0.95, 0.99):
+        raise ValueError("Nur 95% und 99% Konfidenz unterstützt.")
+    if not positions:
         return 0.0, 0.0
-        
-    # Gather historical prices of underlyings
-    underlyings = list(set(p["underlying"] for p in positions))
-    
-    # Fetch 30 days of history
-    hist_data = {}
-    for u in underlyings:
-        try:
-            tk = yf.Ticker(u)
-            hist = tk.history(period="1mo")["Close"]
-            if not hist.empty:
-                hist_data[u] = hist.pct_change().dropna()
-        except Exception:
-            pass
-            
-    if not hist_data:
-        # Default standard deviation of 1.5% if no history available
-        std_dev = 0.015
-    else:
-        # Align series into a DataFrame
-        df_rets = pd.DataFrame(hist_data)
-        
-        # Calculate portfolio returns
-        # Weight each asset by its relative absolute market value
-        weights = {}
-        for p in positions:
-            u = p["underlying"]
-            w = abs(p["market_value"]) / total_val
-            # Accumulate weight for underlying
-            weights[u] = weights.get(u, 0.0) + w
-            
-        df_rets["Portfolio"] = 0.0
-        for u, w in weights.items():
-            if u in df_rets.columns:
-                df_rets["Portfolio"] += df_rets[u] * w
-                
-        std_dev = df_rets["Portfolio"].std()
-        if pd.isna(std_dev) or std_dev == 0:
-            std_dev = 0.015
-            
-    # Z-Score
-    z = 1.645 if confidence == 0.95 else 2.33
-    
-    # 1-day VaR
-    var_pct = z * std_dev
-    var_usd = total_val * var_pct
-    
-    return var_usd, var_pct
+    if any(p["is_option"] for p in positions):
+        raise ValueError("Options-VaR ohne vollständiges Repricing nicht verfügbar.")
+    gross = sum(abs(p["market_value"]) for p in positions)
+    exposures = {}
+    for p in positions:
+        exposures[p["underlying"]] = exposures.get(p["underlying"], 0.0) + p["market_value"]
+    histories = {}
+    for symbol in exposures:
+        history = yf.Ticker(symbol).history(period="1y")["Close"]
+        if history.empty or len(history) < 60:
+            raise ValueError(f"{symbol}: zu wenig Historie für VaR; keine Ersatzvolatilität.")
+        histories[symbol] = history.pct_change(fill_method=None).dropna()
+    returns = pd.DataFrame(histories).dropna()
+    if len(returns) < 59:
+        raise ValueError("Zu wenig gemeinsame Beobachtungen für VaR.")
+    pnl = sum(returns[symbol] * exposure for symbol, exposure in exposures.items())
+    deviation = float(pnl.std())
+    if not np.isfinite(deviation):
+        raise ValueError("VaR ist nicht endlich.")
+    value = (1.645 if confidence == 0.95 else 2.33) * deviation
+    return value, value / gross if gross else 0.0
 
 def run_stress_test(positions: list[dict]) -> list[dict]:
     """
     Runs stress test scenarios on the portfolio.
     Returns a list of scenario results containing estimated impact.
     """
+    if any(p.get("is_option") for p in positions):
+        raise ValueError("Optionsstress benötigt vollständige Greeks/Repricing; kein erfundener Gesamtverlust.")
     scenarios = [
         {
             "name": "Black Monday (Market Crash -20%, VIX Surge)",
@@ -379,7 +297,7 @@ def generate_risk_report_pdf(
         [Paragraph("Portfolio Equity (Net Value):", body_bold_style), Paragraph(f"${equity:,.2f}", body_style),
          Paragraph("Free Cash Capital:", body_bold_style), Paragraph(f"${cash:,.2f}", body_style)],
         [Paragraph("Option Buying Power:", body_bold_style), Paragraph(f"${buying_power:,.2f}", body_style),
-         Paragraph("Brokerage Connection:", body_bold_style), Paragraph("Alpaca Paper (Verified)" if is_alpaca_configured() else "Fallback Simulation Portfolio", body_style)]
+         Paragraph("Brokerage Connection:", body_bold_style), Paragraph("Alpaca Paper: Konto-/Positionsabfrage für diesen Bericht", body_style)]
     ]
     t_summary = Table(summary_data, colWidths=[1.8 * inch, 1.8 * inch, 1.8 * inch, 1.8 * inch])
     t_summary.setStyle(TableStyle([
@@ -529,8 +447,7 @@ def run_risk_manager_run() -> str:
     print("Fetching portfolio details...")
     acc_info = get_account_info()
     if not acc_info:
-        # Default mock account info
-        acc_info = {"equity": 100000.0, "cash": 100000.0, "buying_power": 400000.0}
+        raise ValueError("Broker-Kontodaten fehlen; Bericht abgebrochen.")
         
     positions = fetch_portfolio_positions()
     print(f"Loaded {len(positions)} positions.")

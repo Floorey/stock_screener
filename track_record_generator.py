@@ -27,124 +27,17 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
-API_KEY = os.getenv("ALPACA_API_KEY")
-SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
-BASE_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
-
-headers = {
-    "APCA-API-KEY-ID": API_KEY,
-    "APCA-API-SECRET-KEY": SECRET_KEY,
-    "Content-Type": "application/json"
-}
 
 def get_alpaca_portfolio_history(period="1M") -> pd.DataFrame:
-    """Fetches equity history from Alpaca API."""
-    url = f"{BASE_URL}/v2/account/portfolio/history"
-    # period can be 1D, 1W, 1M, 3M, 1Y, all
-    params = {
-        "period": period,
-        "timeframe": "1D",
-        "extended_hours": "false"
-    }
-    try:
-        response = requests.get(url, headers=headers, params=params, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            timestamps = data.get("timestamp", [])
-            equity = data.get("equity", [])
-            
-            if timestamps and equity and len(timestamps) > 5:
-                # Convert epoch timestamps to dates
-                dates = [datetime.fromtimestamp(ts).strftime("%Y-%m-%d") for ts in timestamps]
-                df = pd.DataFrame({"Date": dates, "Equity": equity})
-                df["Date"] = pd.to_datetime(df["Date"])
-                df = df.dropna().drop_duplicates(subset=["Date"])
-                return df
-    except Exception as e:
-        print(f"Error fetching portfolio history from Alpaca: {e}")
-    return pd.DataFrame()
+    from alpaca_trader import broker_get
+    data = broker_get("/v2/account/portfolio/history", {"period": period, "timeframe": "1D", "extended_hours": "false"})
+    timestamps, equity = data.get("timestamp", []), data.get("equity", [])
+    if len(timestamps) != len(equity):
+        raise ValueError("Unvollständige Broker-Depothistorie.")
+    return pd.DataFrame({"Date": pd.to_datetime(timestamps, unit="s", utc=True).tz_localize(None), "Equity": equity}).dropna().drop_duplicates(subset=["Date"])
 
 def generate_backtested_history(period_days=30) -> pd.DataFrame:
-    """
-    Backtests current portfolio holdings over the specified period to create a simulated equity curve.
-    Used as a fallback if the account is new and has no historical data.
-    """
-    print("Generating simulated historical equity curve based on current allocations...")
-    positions = []
-    if is_alpaca_configured():
-        try:
-            positions = get_positions()
-        except Exception:
-            pass
-            
-    if not positions:
-        # Mock portfolio
-        positions = [
-            {"symbol": "SPY", "qty": "50", "market_value": "24000.0"},
-            {"symbol": "QQQ", "qty": "30", "market_value": "12000.0"},
-            {"symbol": "TLT", "qty": "100", "market_value": "9000.0"}
-        ]
-        
-    total_val = sum(float(p.get("market_value", 0)) for p in positions)
-    if total_val <= 0:
-        total_val = 10000.0
-        
-    start_date = (datetime.now() - timedelta(days=period_days)).strftime("%Y-%m-%d")
-    
-    # Fetch returns for each underlying
-    asset_returns = {}
-    weights = {}
-    
-    for p in positions:
-        symbol = p["symbol"]
-        parsed = parse_osi_symbol(symbol)
-        underlying = parsed["underlying"]
-        mkt_val = float(p.get("market_value", 0))
-        weight = mkt_val / total_val
-        
-        # Accumulate weights for same underlying
-        weights[underlying] = weights.get(underlying, 0.0) + weight
-        
-        if underlying not in asset_returns:
-            try:
-                tk = yf.Ticker(underlying)
-                hist = tk.history(start=start_date)["Close"]
-                if not hist.empty:
-                    asset_returns[underlying] = hist.pct_change().dropna()
-            except Exception:
-                pass
-                
-    if not asset_returns:
-        # Emergency default (S&P 500 returns)
-        tk = yf.Ticker("SPY")
-        hist = tk.history(start=start_date)["Close"]
-        asset_returns["SPY"] = hist.pct_change().dropna()
-        weights = {"SPY": 1.0}
-        
-    # Combine returns into a single DataFrame
-    df_rets = pd.DataFrame(asset_returns)
-    df_rets = df_rets.fillna(0.0)
-    
-    # Calculate weighted daily return
-    df_rets["Portfolio_Return"] = 0.0
-    for u, w in weights.items():
-        if u in df_rets.columns:
-            # If weight is negative (e.g. synthetic short or short option leg), apply negative return impact
-            # Options have deltas, let's keep it simple: apply asset return * weight
-            df_rets["Portfolio_Return"] += df_rets[u] * w
-            
-    # Reconstruct equity starting from $50,000 (standard baseline)
-    start_equity = 50000.0
-    cum_returns = (1 + df_rets["Portfolio_Return"]).cumprod()
-    equity_curve = start_equity * cum_returns
-    
-    df_result = pd.DataFrame({
-        "Date": df_rets.index,
-        "Equity": equity_curve
-    })
-    # Reset index and add initial date
-    df_result = df_result.reset_index(drop=True)
-    return df_result
+    raise ValueError("Keine synthetische Ersatz-Depothistorie. Für Simulationen den separaten Performance-Modus verwenden.")
 
 def calculate_metrics(prices_series: pd.Series, risk_free_rate=0.045) -> dict:
     """Calculates return, volatility, Sharpe ratio, and Max Drawdown."""
@@ -197,8 +90,7 @@ def generate_track_record_report(period="1M", output_path="reports/performance_t
         df_port = get_alpaca_portfolio_history(period)
         
     if df_port.empty or len(df_port) < 5:
-        df_port = generate_backtested_history(days)
-        is_simulated = True
+        raise ValueError("Nicht genügend Broker-Depothistorie für einen echten Track Record. Kein Simulationsersatz.")
         
     start_date = df_port["Date"].min()
     end_date = df_port["Date"].max()

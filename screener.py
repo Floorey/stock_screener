@@ -17,9 +17,6 @@ if sys.platform.startswith("win"):
 # Load environment variables from .env file
 load_dotenv()
 
-ALPACA_API_KEY = os.getenv("ALPACA_API_KEY")
-ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
-ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
 
 # Caching Configuration
 CACHE_FILE = os.path.join(os.path.dirname(__file__), "screener_cache.json")
@@ -45,43 +42,15 @@ def save_cache(cache: Dict[str, Dict[str, Any]]) -> None:
         print(f"[Cache] Fehler beim Schreiben des Caches: {e}")
 
 def get_alpaca_assets() -> Dict[str, Dict[str, bool]]:
-    """
-    Fetches all active US equities from Alpaca and returns a dictionary 
-    mapping symbol -> {tradable: bool, shortable: bool, easy_to_borrow: bool}
-    """
-    if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
+    from alpaca_trader import broker_get, is_alpaca_configured, AlpacaReadError
+    if not is_alpaca_configured():
         return {}
-    
-    url = f"{ALPACA_BASE_URL}/v2/assets"
-    headers = {
-        "APCA-API-KEY-ID": ALPACA_API_KEY,
-        "APCA-API-SECRET-KEY": ALPACA_SECRET_KEY
-    }
-    params = {
-        "status": "active",
-        "asset_class": "us_equity"
-    }
-    
     try:
-        response = requests.get(url, headers=headers, params=params, timeout=10)
-        if response.status_code == 200:
-            assets = response.json()
-            asset_dict = {}
-            for asset in assets:
-                symbol = asset.get("symbol")
-                asset_dict[symbol] = {
-                    "tradable": asset.get("tradable", False),
-                    "shortable": asset.get("shortable", False),
-                    "easy_to_borrow": asset.get("easy_to_borrow", False)
-                }
-            print(f"[Alpaca] {len(asset_dict)} aktive US-Aktien erfolgreich geladen.")
-            return asset_dict
-        else:
-            print(f"[Alpaca] Fehler beim Laden des Asset-Status: {response.status_code}")
-    except Exception as e:
-        print(f"[Alpaca] Fehler bei der Verbindung zur Alpaca API: {e}")
-    
-    return {}
+        assets = broker_get("/v2/assets", {"status": "active", "asset_class": "us_equity"})
+        return {a["symbol"]: {k: a.get(k) is True for k in ("tradable", "shortable", "easy_to_borrow")} for a in assets}
+    except AlpacaReadError as exc:
+        print(f"[Alpaca] Handelbarkeit unbekannt: {exc}")
+        return {}
 
 def fetch_sp500_tickers() -> List[Tuple[str, str]]:
     """Scrapes S&P 500 tickers and company names from Wikipedia. Includes fallback list."""
@@ -252,8 +221,8 @@ def get_single_ticker_data(ticker_symbol: str, company_name: str, index_name: st
         "Symbol": ticker_symbol,
         "Company": company_name,
         "Index": index_name,
-        "Tradable": alpaca_status.get("tradable", True),
-        "Shortable": alpaca_status.get("shortable", True),
+        "Tradable": alpaca_status.get("tradable"),
+        "Shortable": alpaca_status.get("shortable"),
         "EasyToBorrow": alpaca_status.get("easy_to_borrow", False),
         "Sector": "N/A",
         "Industry": "N/A",
@@ -427,7 +396,7 @@ def run_screener(index_name: str = "S&P 500", limit: int = None, max_workers: in
     
     filtered_tickers = []
     for ticker, name in tickers_data:
-        status = alpaca_assets.get(ticker, {"tradable": True, "shortable": True, "easy_to_borrow": False})
+        status = alpaca_assets.get(ticker, {"tradable": None, "shortable": None, "easy_to_borrow": False})
         filtered_tickers.append((ticker, name, status))
         
     # 3. Cache Check & Data Splits
@@ -443,8 +412,8 @@ def run_screener(index_name: str = "S&P 500", limit: int = None, max_workers: in
             cached_data = cached_entry["data"]
             # Sync metadata dynamic values
             cached_data["Index"] = index_name
-            cached_data["Tradable"] = status.get("tradable", True)
-            cached_data["Shortable"] = status.get("shortable", True)
+            cached_data["Tradable"] = status.get("tradable")
+            cached_data["Shortable"] = status.get("shortable")
             cached_data["EasyToBorrow"] = status.get("easy_to_borrow", False)
             results.append(cached_data)
         else:
@@ -501,8 +470,8 @@ def run_screener(index_name: str = "S&P 500", limit: int = None, max_workers: in
                     for ticker_t, name_t, status_t in filtered_tickers:
                         if ticker_t == ticker:
                             fallback_data["Index"] = index_name
-                            fallback_data["Tradable"] = status_t.get("tradable", True)
-                            fallback_data["Shortable"] = status_t.get("shortable", True)
+                            fallback_data["Tradable"] = status_t.get("tradable")
+                            fallback_data["Shortable"] = status_t.get("shortable")
                             fallback_data["EasyToBorrow"] = status_t.get("easy_to_borrow", False)
                     results.append(fallback_data)
                 else:

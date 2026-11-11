@@ -502,6 +502,8 @@ def render_options_tab(get_single_ticker_data, calculate_scores):
                                     use_container_width=True,
                                     hide_index=True
                                 )
+                                from paper_order_ui import offer_screener_ticket
+                                offer_screener_ticket(enriched_puts, "screener_put_ticket")
                                 
                         with tab_calls_det:
                             if enriched_calls.empty:
@@ -514,3 +516,5 @@ def render_options_tab(get_single_ticker_data, calculate_scores):
                                     use_container_width=True,
                                     hide_index=True
                                 )
+                                from paper_order_ui import offer_screener_ticket
+                                offer_screener_ticket(enriched_calls, "screener_call_ticket")
